@@ -4,7 +4,9 @@ import { createCollection, createLiveQueryCollection, eq } from '@tanstack/db'
 import { useLiveInfiniteQuery } from '../src/useLiveInfiniteQuery'
 import { mockSyncCollectionOptions } from '../../db/tests/utils'
 import { createFilterFunctionFromExpression } from '../../db/src/collection/change-events'
-import type { LoadSubsetOptions } from '@tanstack/db'
+import { queryCollectionOptions } from '../../query-db-collection/src/query'
+import { QueryClient } from '../../query-db-collection/node_modules/@tanstack/query-core'
+import type { Collection, LoadSubsetOptions } from '@tanstack/db'
 
 type Post = {
   id: string
@@ -1867,5 +1869,145 @@ describe(`useLiveInfiniteQuery`, () => {
         )
       })
     }).toThrow(/useLiveInfiniteQuery.*dependency/)
+  })
+
+  it(`should not stop paginating early after remounting`, async () => {
+    type OrderedMessage = {
+      id: string
+      sequence: number
+      createdAt: number
+    }
+
+    const PAGE_SIZE = 50
+    const backendRows: Array<OrderedMessage> = Array.from(
+      { length: 200 },
+      (_, index) => ({
+        id: `message-${String(index + 6).padStart(4, `0`)}`,
+        sequence: index + 6,
+        createdAt: 10_000 - index,
+      }),
+    )
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: 5 * 60 * 1000,
+          staleTime: Infinity,
+          retry: false,
+        },
+      },
+    })
+
+    const source = createCollection<OrderedMessage, string>(
+      queryCollectionOptions<OrderedMessage>({
+        id: `react-db-remount-gap`,
+        queryClient: queryClient as any,
+        syncMode: `on-demand`,
+        getKey: (item) => item.id,
+        queryKey: (opts) => [
+          `react-db-remount-gap`,
+          opts.limit ?? null,
+          opts.cursor ? JSON.stringify(opts.cursor.whereFrom) : `initial`,
+        ],
+        queryFn: (ctx) => {
+          const options = (ctx.meta?.loadSubsetOptions ?? {}) as LoadSubsetOptions
+          let rows = [...backendRows].sort(
+            (left, right) =>
+              right.createdAt - left.createdAt ||
+              right.id.localeCompare(left.id),
+          )
+
+          if (options.cursor?.whereFrom) {
+            const includeRow = createFilterFunctionFromExpression(
+              options.cursor.whereFrom,
+            )
+            rows = rows.filter(includeRow)
+          }
+
+          if (options.limit !== undefined) {
+            rows = rows.slice(0, options.limit)
+          }
+
+          return rows
+        },
+      }) as any,
+    ) as Collection<OrderedMessage, string>
+
+    const queryFactory = (q: any) =>
+      q
+        .from({ message: source })
+        .orderBy(({ message }: any) => message.createdAt, `desc`)
+        .select(({ message }: any) => ({
+          id: message.id,
+          sequence: message.sequence,
+          createdAt: message.createdAt,
+        }))
+
+    const firstMount = renderHook(() =>
+      useLiveInfiniteQuery(queryFactory, {
+        pageSize: PAGE_SIZE,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(firstMount.result.current.isReady).toBe(true)
+    })
+    expect(firstMount.result.current.data).toHaveLength(50)
+
+    act(() => {
+      firstMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(firstMount.result.current.data).toHaveLength(100)
+    })
+
+    act(() => {
+      firstMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(firstMount.result.current.data).toHaveLength(150)
+    })
+
+    firstMount.unmount()
+
+    const secondMount = renderHook(() =>
+      useLiveInfiniteQuery(queryFactory, {
+        pageSize: PAGE_SIZE,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(secondMount.result.current.isReady).toBe(true)
+    })
+    expect(secondMount.result.current.data).toHaveLength(50)
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(100)
+    })
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(150)
+    })
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(200)
+    })
+
+    expect(
+      (secondMount.result.current.data as Array<OrderedMessage>).map(
+        (row) => row.sequence,
+      ),
+    ).toEqual(
+      Array.from({ length: 200 }, (_, index) => index + 6),
+    )
   })
 })
