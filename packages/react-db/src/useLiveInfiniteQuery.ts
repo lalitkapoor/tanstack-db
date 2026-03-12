@@ -208,6 +208,19 @@ export function useLiveInfiniteQuery<TContext extends Context>(
         deps,
       )
 
+  useEffect(() => {
+    if (isCollection) {
+      return
+    }
+
+    const ownedCollection = queryResult.collection
+    return () => {
+      void ownedCollection.cleanup().catch((error: unknown) => {
+        console.error(`useLiveInfiniteQuery: cleanup failed:`, error)
+      })
+    }
+  }, [isCollection, queryResult.collection])
+
   // Adjust window when pagination changes
   useEffect(() => {
     const utils = queryResult.collection.utils

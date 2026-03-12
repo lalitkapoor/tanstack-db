@@ -908,7 +908,12 @@ export function queryCollectionOptions(
     }
 
     const subscribeToQueries = () => {
-      state.observers.forEach(subscribeToQuery)
+      state.observers.forEach((observer, hashedQueryKey) => {
+        const refcount = queryRefCounts.get(hashedQueryKey) || 0
+        if (refcount > 0) {
+          subscribeToQuery(observer, hashedQueryKey)
+        }
+      })
     }
 
     const unsubscribeFromQueries = () => {
@@ -953,6 +958,11 @@ export function queryCollectionOptions(
 
     // Ensure we process any existing query data (QueryObserver doesn't invoke its callback automatically with initial state)
     state.observers.forEach((observer, hashedQueryKey) => {
+      const refcount = queryRefCounts.get(hashedQueryKey) || 0
+      if (refcount <= 0) {
+        return
+      }
+
       const cachedQueryKey = hashToQueryKey.get(hashedQueryKey)!
       const handleQueryResult = makeQueryResultHandler(cachedQueryKey)
       handleQueryResult(observer.getCurrentResult())
