@@ -4,7 +4,9 @@ import { createCollection, createLiveQueryCollection, eq } from '@tanstack/db'
 import { useLiveInfiniteQuery } from '../src/useLiveInfiniteQuery'
 import { mockSyncCollectionOptions } from '../../db/tests/utils'
 import { createFilterFunctionFromExpression } from '../../db/src/collection/change-events'
-import type { LoadSubsetOptions } from '@tanstack/db'
+import { queryCollectionOptions } from '../../query-db-collection/src/query'
+import { QueryClient } from '../../query-db-collection/node_modules/@tanstack/query-core'
+import type { Collection, LoadSubsetOptions } from '@tanstack/db'
 
 type Post = {
   id: string
@@ -1867,5 +1869,156 @@ describe(`useLiveInfiniteQuery`, () => {
         )
       })
     }).toThrow(/useLiveInfiniteQuery.*dependency/)
+  })
+
+  it(`should resume pagination correctly after remounting`, async () => {
+    type OrderedMessage = {
+      id: string
+      sequence: number
+      createdAt: number
+    }
+
+    const PAGE_SIZE = 50
+    const backendRows: Array<OrderedMessage> = Array.from(
+      { length: 200 },
+      (_, index) => ({
+        id: `message-${String(index + 6).padStart(4, `0`)}`,
+        sequence: index + 6,
+        createdAt: 10_000 - index,
+      }),
+    )
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          gcTime: 5 * 60 * 1000,
+          staleTime: Infinity,
+          retry: false,
+        },
+      },
+    })
+
+    const source = createCollection<OrderedMessage, string>(
+      queryCollectionOptions<OrderedMessage>({
+        id: `react-db-remount-gap`,
+        queryClient: queryClient as any,
+        syncMode: `on-demand`,
+        getKey: (item) => item.id,
+        queryKey: (opts) => [
+          `react-db-remount-gap`,
+          opts.limit ?? null,
+          opts.cursor ? JSON.stringify(opts.cursor.whereFrom) : `initial`,
+        ],
+        queryFn: (ctx) => {
+          const options = (ctx.meta?.loadSubsetOptions ?? {}) as LoadSubsetOptions
+          let rows = [...backendRows].sort(
+            (left, right) =>
+              right.createdAt - left.createdAt ||
+              right.id.localeCompare(left.id),
+          )
+
+          if (options.cursor?.whereFrom) {
+            const includeRow = createFilterFunctionFromExpression(
+              options.cursor.whereFrom,
+            )
+            rows = rows.filter(includeRow)
+          }
+
+          if (options.limit !== undefined) {
+            rows = rows.slice(0, options.limit)
+          }
+
+          return rows
+        },
+      }) as any,
+    ) as Collection<OrderedMessage, string>
+
+    const queryFactory = (q: any) =>
+      q
+        .from({ message: source })
+        .orderBy(({ message }: any) => message.createdAt, `desc`)
+        .select(({ message }: any) => ({
+          id: message.id,
+          sequence: message.sequence,
+          createdAt: message.createdAt,
+        }))
+
+    // Reproduce the browser/app pattern behind the bug:
+    // 1) mount and paginate out to a larger frontier,
+    // 2) unmount,
+    // 3) remount back at page 1,
+    // 4) paginate again and verify the hook can still reach the full result.
+
+    // The first mount grows the local frontier from 51 -> 101 -> 151 rows.
+    // This simulates a user paging a few times before leaving the screen.
+    const firstMount = renderHook(() =>
+      useLiveInfiniteQuery(queryFactory, {
+        pageSize: PAGE_SIZE,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(firstMount.result.current.isReady).toBe(true)
+    })
+    expect(firstMount.result.current.data).toHaveLength(50)
+
+    act(() => {
+      firstMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(firstMount.result.current.data).toHaveLength(100)
+    })
+
+    act(() => {
+      firstMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(firstMount.result.current.data).toHaveLength(150)
+    })
+
+    firstMount.unmount()
+
+    // The second mount starts over at page 1 (51 requested rows), but it is
+    // reopening the same query over already-hydrated local state. The bug was
+    // that pagination would stop early here instead of rebuilding out to 200.
+    const secondMount = renderHook(() =>
+      useLiveInfiniteQuery(queryFactory, {
+        pageSize: PAGE_SIZE,
+      }),
+    )
+
+    await waitFor(() => {
+      expect(secondMount.result.current.isReady).toBe(true)
+    })
+    expect(secondMount.result.current.data).toHaveLength(50)
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(100)
+    })
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(150)
+    })
+
+    act(() => {
+      secondMount.result.current.fetchNextPage()
+    })
+    await waitFor(() => {
+      expect(secondMount.result.current.data).toHaveLength(200)
+    })
+
+    expect(
+      (secondMount.result.current.data as Array<OrderedMessage>).map(
+        (row) => row.sequence,
+      ),
+    ).toEqual(
+      Array.from({ length: 200 }, (_, index) => index + 6),
+    )
   })
 })

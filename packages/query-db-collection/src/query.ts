@@ -906,8 +906,18 @@ export function queryCollectionOptions(
       }
     }
 
+    // On remount we may still have cached QueryObservers for older window sizes,
+    // but only observers with a positive refcount still belong to a live query.
+    // Resubscribing zero-refcount observers replays stale larger-window results
+    // into the source collection before the new mount rebuilds from page 1,
+    // which can make pagination stop early after remount.
     const subscribeToQueries = () => {
-      state.observers.forEach(subscribeToQuery)
+      state.observers.forEach((observer, hashedQueryKey) => {
+        const refcount = queryRefCounts.get(hashedQueryKey) || 0
+        if (refcount > 0) {
+          subscribeToQuery(observer, hashedQueryKey)
+        }
+      })
     }
 
     const unsubscribeFromQueries = () => {
@@ -952,6 +962,11 @@ export function queryCollectionOptions(
 
     // Ensure we process any existing query data (QueryObserver doesn't invoke its callback automatically with initial state)
     state.observers.forEach((observer, hashedQueryKey) => {
+      const refcount = queryRefCounts.get(hashedQueryKey) || 0
+      if (refcount <= 0) {
+        return
+      }
+
       const cachedQueryKey = hashToQueryKey.get(hashedQueryKey)!
       const handleQueryResult = makeQueryResultHandler(cachedQueryKey)
       handleQueryResult(observer.getCurrentResult())
