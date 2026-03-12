@@ -1871,7 +1871,7 @@ describe(`useLiveInfiniteQuery`, () => {
     }).toThrow(/useLiveInfiniteQuery.*dependency/)
   })
 
-  it(`should resume pagination correctly after remounting`, async () => {
+  it(`should paginate beyond the prior hydrated amount after remounting`, async () => {
     type OrderedMessage = {
       id: string
       sequence: number
