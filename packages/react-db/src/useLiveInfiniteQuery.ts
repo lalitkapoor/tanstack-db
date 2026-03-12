@@ -208,6 +208,11 @@ export function useLiveInfiniteQuery<TContext extends Context>(
         deps,
       )
 
+  // Query-function infinite queries create an internal live query collection.
+  // On remount, if that owned collection is left alive, its larger previous
+  // window can continue to drive pagination state after the new hook instance
+  // has reset back to page 1. Cleaning it up on unmount ensures the remounted
+  // hook rebuilds pagination from its current window instead of stale state.
   useEffect(() => {
     if (isCollection) {
       return

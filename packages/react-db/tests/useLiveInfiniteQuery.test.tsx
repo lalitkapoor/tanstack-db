@@ -1871,7 +1871,7 @@ describe(`useLiveInfiniteQuery`, () => {
     }).toThrow(/useLiveInfiniteQuery.*dependency/)
   })
 
-  it(`should not stop paginating early after remounting`, async () => {
+  it(`should resume pagination correctly after remounting`, async () => {
     type OrderedMessage = {
       id: string
       sequence: number
@@ -1943,6 +1943,14 @@ describe(`useLiveInfiniteQuery`, () => {
           createdAt: message.createdAt,
         }))
 
+    // Reproduce the browser/app pattern behind the bug:
+    // 1) mount and paginate out to a larger frontier,
+    // 2) unmount,
+    // 3) remount back at page 1,
+    // 4) paginate again and verify the hook can still reach the full result.
+
+    // The first mount grows the local frontier from 51 -> 101 -> 151 rows.
+    // This simulates a user paging a few times before leaving the screen.
     const firstMount = renderHook(() =>
       useLiveInfiniteQuery(queryFactory, {
         pageSize: PAGE_SIZE,
@@ -1970,6 +1978,9 @@ describe(`useLiveInfiniteQuery`, () => {
 
     firstMount.unmount()
 
+    // The second mount starts over at page 1 (51 requested rows), but it is
+    // reopening the same query over already-hydrated local state. The bug was
+    // that pagination would stop early here instead of rebuilding out to 200.
     const secondMount = renderHook(() =>
       useLiveInfiniteQuery(queryFactory, {
         pageSize: PAGE_SIZE,
