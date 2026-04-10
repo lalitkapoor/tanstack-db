@@ -2893,7 +2893,12 @@ describe(`createLiveQueryCollection`, () => {
             begin()
             write({
               type: `insert`,
-              value: { id: 1, projectId: 10, title: `P1 high`, severity: `high` },
+              value: {
+                id: 1,
+                projectId: 10,
+                title: `P1 high`,
+                severity: `high`,
+              },
             })
             write({
               type: `insert`,
@@ -2901,7 +2906,12 @@ describe(`createLiveQueryCollection`, () => {
             })
             write({
               type: `insert`,
-              value: { id: 3, projectId: 20, title: `P2 high`, severity: `high` },
+              value: {
+                id: 3,
+                projectId: 20,
+                title: `P2 high`,
+                severity: `high`,
+              },
             })
             write({
               type: `insert`,
@@ -2954,46 +2964,6 @@ describe(`createLiveQueryCollection`, () => {
             return {
               loadSubset: (options: LoadSubsetOptions) => {
                 loadSubsetCalls.push(options)
-                return true
-              },
-            }
-          },
-        },
-      })
-
-      return { collection, loadSubsetCalls }
-    }
-
-    function createIssuesCollectionWithFallbackTracking() {
-      const loadSubsetCalls: Array<LoadSubsetOptions> = []
-      let firstSubsetRequest = true
-
-      const collection = createCollection<Issue>({
-        id: `includes-issues-subset-fallback`,
-        getKey: (issue) => issue.id,
-        syncMode: `on-demand`,
-        sync: {
-          sync: ({ begin, write, commit, markReady }) => {
-            begin()
-            write({
-              type: `insert`,
-              value: { id: 1, projectId: 10, title: `P1 high`, severity: `high` },
-            })
-            write({
-              type: `insert`,
-              value: { id: 3, projectId: 20, title: `P2 high`, severity: `high` },
-            })
-            commit()
-            markReady()
-            return {
-              loadSubset: (options: LoadSubsetOptions) => {
-                loadSubsetCalls.push(options)
-
-                if (firstSubsetRequest && options.where != null) {
-                  firstSubsetRequest = false
-                  return false
-                }
-
                 return true
               },
             }
@@ -3057,7 +3027,9 @@ describe(`createLiveQueryCollection`, () => {
       await query.preload()
       await flushPromises()
 
-      const callWithWhere = loadSubsetCalls.find((options) => options.where != null)
+      const callWithWhere = loadSubsetCalls.find(
+        (options) => options.where != null,
+      )
 
       expect(callWithWhere?.where).toBeDefined()
 
@@ -3095,7 +3067,7 @@ describe(`createLiveQueryCollection`, () => {
     it(`falls back to a broad child snapshot when optimized includes subset loading fails`, async () => {
       const projects = createProjectsCollectionForIncludes()
       const { collection: issues, loadSubsetCalls } =
-        createIssuesCollectionWithFallbackTracking()
+        createIssuesCollectionWithTracking()
 
       const query = createLiveQueryCollection((q) =>
         q.from({ p: projects }).select(({ p }) => ({
