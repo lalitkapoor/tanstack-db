@@ -2804,6 +2804,12 @@ describe(`createLiveQueryCollection`, () => {
       severity: `low` | `high`
     }
 
+    type Comment = {
+      id: number
+      issueId: number | null
+      body: string
+    }
+
     const findExprByName = (
       expr: LoadSubsetOptions[`where`],
       name: string,
@@ -2836,6 +2842,38 @@ describe(`createLiveQueryCollection`, () => {
             write({ type: `insert`, value: { id: 10, name: `Alpha` } })
             write({ type: `insert`, value: { id: 20, name: `Beta` } })
             write({ type: `insert`, value: { id: null, name: `Unassigned` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createProjectsCollectionWithoutNullForIncludes() {
+      return createCollection<Project>({
+        id: `includes-projects-subset-no-null`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({ type: `insert`, value: { id: 10, name: `Alpha` } })
+            write({ type: `insert`, value: { id: 20, name: `Beta` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createNullProjectsCollectionForIncludes() {
+      return createCollection<Project>({
+        id: `includes-projects-subset-null-only`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({ type: `insert`, value: { id: null, name: `Unassigned A` } })
+            write({ type: `insert`, value: { id: null, name: `Unassigned B` } })
             commit()
             markReady()
           },
@@ -2879,6 +2917,83 @@ describe(`createLiveQueryCollection`, () => {
             return {
               loadSubset: (options: LoadSubsetOptions) => {
                 loadSubsetCalls.push(options)
+                return true
+              },
+            }
+          },
+        },
+      })
+
+      return { collection, loadSubsetCalls }
+    }
+
+    function createCommentsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection<Comment>({
+        id: `includes-comments-subset`,
+        getKey: (comment) => comment.id,
+        syncMode: `on-demand`,
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({
+              type: `insert`,
+              value: { id: 101, issueId: 1, body: `Issue 1 comment` },
+            })
+            write({
+              type: `insert`,
+              value: { id: 102, issueId: 3, body: `Issue 3 comment` },
+            })
+            write({
+              type: `insert`,
+              value: { id: 103, issueId: null, body: `Unassigned comment` },
+            })
+            commit()
+            markReady()
+            return {
+              loadSubset: (options: LoadSubsetOptions) => {
+                loadSubsetCalls.push(options)
+                return true
+              },
+            }
+          },
+        },
+      })
+
+      return { collection, loadSubsetCalls }
+    }
+
+    function createIssuesCollectionWithFallbackTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+      let firstSubsetRequest = true
+
+      const collection = createCollection<Issue>({
+        id: `includes-issues-subset-fallback`,
+        getKey: (issue) => issue.id,
+        syncMode: `on-demand`,
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({
+              type: `insert`,
+              value: { id: 1, projectId: 10, title: `P1 high`, severity: `high` },
+            })
+            write({
+              type: `insert`,
+              value: { id: 3, projectId: 20, title: `P2 high`, severity: `high` },
+            })
+            commit()
+            markReady()
+            return {
+              loadSubset: (options: LoadSubsetOptions) => {
+                loadSubsetCalls.push(options)
+
+                if (firstSubsetRequest && options.where != null) {
+                  firstSubsetRequest = false
+                  return false
+                }
+
                 return true
               },
             }
@@ -2952,6 +3067,98 @@ describe(`createLiveQueryCollection`, () => {
       expect(inExpr).toBeDefined()
       expect(getInValues(inExpr!)).toEqual([10, 20])
       expect(eqExpr).toBeDefined()
+    })
+
+    it(`does not request child subsets when every parent correlation key is null`, async () => {
+      const projects = createNullProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      expect(loadSubsetCalls).toEqual([])
+    })
+
+    it(`falls back to a broad child snapshot when optimized includes subset loading fails`, async () => {
+      const projects = createProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithFallbackTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      expect(loadSubsetCalls).toHaveLength(2)
+      expect(loadSubsetCalls[0]?.where).toBeDefined()
+      expect(findExprByName(loadSubsetCalls[0]?.where, `in`)).toBeDefined()
+      expect(loadSubsetCalls[1]?.where).toBeUndefined()
+    })
+
+    it(`applies subset loading recursively for nested includes`, async () => {
+      const projects = createProjectsCollectionWithoutNullForIncludes()
+      const { collection: issues, loadSubsetCalls: issueSubsetCalls } =
+        createIssuesCollectionWithTracking()
+      const { collection: comments, loadSubsetCalls: commentSubsetCalls } =
+        createCommentsCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .where(({ i }) => eq(i.severity, `high`))
+            .select(({ i }) => ({
+              id: i.id,
+              comments: q
+                .from({ c: comments })
+                .where(({ c }) => eq(c.issueId, i.id))
+                .select(({ c }) => ({
+                  id: c.id,
+                  body: c.body,
+                })),
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      const issueInExpr = issueSubsetCalls
+        .map((options) => findExprByName(options.where, `in`))
+        .find((expr) => expr !== undefined)
+      const commentInExpr = commentSubsetCalls
+        .map((options) => findExprByName(options.where, `in`))
+        .find((expr) => expr !== undefined)
+
+      expect(issueInExpr).toBeDefined()
+      expect(getInValues(issueInExpr!)).toEqual([10, 20])
+      expect(commentInExpr).toBeDefined()
+      expect(getInValues(commentInExpr!)).toEqual([1, 3])
     })
   })
 
