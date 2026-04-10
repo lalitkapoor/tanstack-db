@@ -2792,6 +2792,8 @@ describe(`createLiveQueryCollection`, () => {
   })
 
   describe(`includes subset loading`, () => {
+    const SQLITE_MAX_DYNAMIC_IN_LIST_VALUES = 999
+
     type Project = {
       id: number | null
       name: string
@@ -2858,6 +2860,23 @@ describe(`createLiveQueryCollection`, () => {
             begin()
             write({ type: `insert`, value: { id: 10, name: `Alpha` } })
             write({ type: `insert`, value: { id: 20, name: `Beta` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createLargeProjectsCollectionForIncludes(count: number) {
+      return createCollection<Project>({
+        id: `includes-projects-subset-large`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            for (let id = 1; id <= count; id++) {
+              write({ type: `insert`, value: { id, name: `Project ${id}` } })
+            }
             commit()
             markReady()
           },
@@ -3116,6 +3135,32 @@ describe(`createLiveQueryCollection`, () => {
       expect(loadSubsetCalls[0]?.where).toBeDefined()
       expect(findExprByName(loadSubsetCalls[0]?.where, `in`)).toBeDefined()
       expect(loadSubsetCalls[1]?.where).toBeUndefined()
+    })
+
+    it(`falls back to a broad child snapshot when parent keys exceed the SQLite-safe IN-list size`, async () => {
+      const projects = createLargeProjectsCollectionForIncludes(
+        SQLITE_MAX_DYNAMIC_IN_LIST_VALUES + 1,
+      )
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      expect(loadSubsetCalls.length).toBeGreaterThan(0)
+      expect(loadSubsetCalls[0]?.where).toBeUndefined()
     })
 
     it(`applies subset loading recursively for nested includes`, async () => {

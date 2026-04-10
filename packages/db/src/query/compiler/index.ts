@@ -54,6 +54,13 @@ export type { WindowOptions } from './types.js'
 export const INCLUDES_ROUTING = Symbol(`includesRouting`)
 
 /**
+ * SQLite commonly defaults to 999 bound variables. Keep dynamic IN-list subset
+ * loading under that ceiling and fall back to the broader child snapshot when
+ * the parent key set grows beyond it.
+ */
+const SQLITE_SAFE_DYNAMIC_IN_LIST_LIMIT = 999
+
+/**
  * Result of compiling an includes subquery, including the child pipeline
  * and metadata needed to route child results to parent-scoped Collections.
  */
@@ -244,6 +251,11 @@ export function compileQuery(
         ]
 
         if (correlationKeys.length === 0) {
+          return
+        }
+
+        if (correlationKeys.length > SQLITE_SAFE_DYNAMIC_IN_LIST_LIMIT) {
+          childSourceSubscription.requestSnapshot()
           return
         }
 
