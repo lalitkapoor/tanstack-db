@@ -169,17 +169,26 @@ function processJoin(
     throw new JoinCollectionNotFoundError(joinedCollectionId)
   }
 
+  const preferredActiveSource = getPreferredActiveSourceForInnerJoin(
+    joinClause.type,
+    mainSource,
+    joinedSource,
+    aliasRemapping,
+    sourceWhereClauses,
+  )
+
   const { activeSource, lazySource } = getActiveAndLazySources(
     joinClause.type,
     mainCollection,
     joinedCollection,
-    {
-      mainAlias: mainSource,
-      joinedAlias: joinedSource,
-      aliasRemapping,
-      sourceWhereClauses,
-    },
   )
+  const effectiveActiveSource = preferredActiveSource ?? activeSource
+  const effectiveLazySource =
+    preferredActiveSource === undefined
+      ? lazySource
+      : preferredActiveSource === `main`
+        ? joinedCollection
+        : mainCollection
 
   // Analyze which source each expression refers to and swap if necessary
   const availableSources = Object.keys(sources)
@@ -230,12 +239,13 @@ function processJoin(
     throw new UnsupportedJoinTypeError(joinClause.type)
   }
 
-  if (activeSource) {
+  if (effectiveActiveSource && effectiveLazySource) {
     // If the lazy collection comes from a subquery that has a limit and/or an offset clause
     // then we need to deoptimize the join because we don't know which rows are in the result set
     // since we simply lookup matching keys in the index but the index contains all rows
     // (not just the ones that pass the limit and offset clauses)
-    const lazyFrom = activeSource === `main` ? joinClause.from : rawQuery.from
+    const lazyFrom =
+      effectiveActiveSource === `main` ? joinClause.from : rawQuery.from
     const limitedSubquery =
       lazyFrom.type === `queryRef` &&
       (lazyFrom.query.limit || lazyFrom.query.offset)
@@ -255,21 +265,22 @@ function processJoin(
       // this Set is passed by the liveQueryCollection to the compiler
       // such that the liveQueryCollection can check it after compilation
       // to know which source aliases should load data lazily (not initially)
-      const lazyAlias = activeSource === `main` ? joinedSource : mainSource
+      const lazyAlias =
+        effectiveActiveSource === `main` ? joinedSource : mainSource
       lazySources.add(lazyAlias)
 
       const activePipeline =
-        activeSource === `main` ? mainPipeline : joinedPipeline
+        effectiveActiveSource === `main` ? mainPipeline : joinedPipeline
 
       const lazySourceJoinExpr =
-        activeSource === `main`
+        effectiveActiveSource === `main`
           ? (joinedExpr as PropRef)
           : (mainExpr as PropRef)
 
       const followRefResult = followRef(
         rawQuery,
         lazySourceJoinExpr,
-        lazySource,
+        effectiveLazySource,
       )!
       const followRefCollection = followRefResult.collection
 
@@ -301,7 +312,7 @@ function processJoin(
             throw new SubscriptionNotFoundError(
               resolvedAlias,
               lazyAlias,
-              lazySource.id,
+              effectiveLazySource.id,
               Object.keys(subscriptions),
             )
           }
@@ -338,7 +349,7 @@ function processJoin(
         }),
       )
 
-      if (activeSource === `main`) {
+      if (effectiveActiveSource === `main`) {
         mainPipeline = activePipelineWithLoading
       } else {
         joinedPipeline = activePipelineWithLoading
@@ -640,12 +651,6 @@ function getActiveAndLazySources(
   joinType: JoinClause[`type`],
   leftCollection: Collection,
   rightCollection: Collection,
-  options: {
-    mainAlias: string
-    joinedAlias: string
-    aliasRemapping: Record<string, string>
-    sourceWhereClauses: Map<string, BasicExpression<boolean>>
-  },
 ):
   | { activeSource: `main` | `joined`; lazySource: Collection }
   | { activeSource: undefined; lazySource: undefined } {
@@ -658,23 +663,6 @@ function getActiveAndLazySources(
     case `right`:
       return { activeSource: `joined`, lazySource: leftCollection }
     case `inner`:
-      {
-        const resolvedMainAlias =
-          options.aliasRemapping[options.mainAlias] || options.mainAlias
-        const resolvedJoinedAlias =
-          options.aliasRemapping[options.joinedAlias] || options.joinedAlias
-        const mainHasPredicate =
-          options.sourceWhereClauses.has(resolvedMainAlias)
-        const joinedHasPredicate =
-          options.sourceWhereClauses.has(resolvedJoinedAlias)
-
-        if (mainHasPredicate !== joinedHasPredicate) {
-          return mainHasPredicate
-            ? { activeSource: `main`, lazySource: rightCollection }
-            : { activeSource: `joined`, lazySource: leftCollection }
-        }
-      }
-
       // The smallest collection should be the active collection
       // and the biggest collection should be lazy
       return leftCollection.size < rightCollection.size
@@ -683,4 +671,27 @@ function getActiveAndLazySources(
     default:
       return { activeSource: undefined, lazySource: undefined }
   }
+}
+
+function getPreferredActiveSourceForInnerJoin(
+  joinType: JoinClause[`type`],
+  mainAlias: string,
+  joinedAlias: string,
+  aliasRemapping: Record<string, string>,
+  sourceWhereClauses: Map<string, BasicExpression<boolean>>,
+): `main` | `joined` | undefined {
+  if (joinType !== `inner`) {
+    return undefined
+  }
+
+  const resolvedMainAlias = aliasRemapping[mainAlias] || mainAlias
+  const resolvedJoinedAlias = aliasRemapping[joinedAlias] || joinedAlias
+  const mainHasPredicate = sourceWhereClauses.has(resolvedMainAlias)
+  const joinedHasPredicate = sourceWhereClauses.has(resolvedJoinedAlias)
+
+  if (mainHasPredicate === joinedHasPredicate) {
+    return undefined
+  }
+
+  return mainHasPredicate ? `main` : `joined`
 }
