@@ -2791,6 +2791,214 @@ describe(`createLiveQueryCollection`, () => {
     })
   })
 
+  describe(`predicate-aware inner join subset loading`, () => {
+    type Post = {
+      id: number
+      title: string
+      authorId: number | null
+      published: boolean
+    }
+
+    type Author = {
+      id: number
+      departmentId: number
+      name: string
+    }
+
+    const findExprByName = (
+      expr: LoadSubsetOptions[`where`],
+      name: string,
+    ): Func | undefined => {
+      if (!(expr instanceof Func)) return undefined
+      if (expr.name === name) return expr
+      if (expr.name === `and` || expr.name === `or`) {
+        for (const arg of expr.args) {
+          const found = findExprByName(arg, name)
+          if (found) return found
+        }
+      }
+      return undefined
+    }
+
+    const getInValues = (expr: Func): Array<number> => {
+      const arrayArg = expr.args[1]
+      expect(arrayArg).toBeInstanceOf(Value)
+      const valuesArg = arrayArg as Value<Array<number>>
+      return valuesArg.value.slice().sort((a, b) => a - b)
+    }
+
+    function createPostsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection(
+        mockSyncCollectionOptions<Post>({
+          id: `posts-predicate-aware-join`,
+          getKey: (post) => post.id,
+          initialData: [
+            {
+              id: 1,
+              title: `Post by eng author`,
+              authorId: 1,
+              published: true,
+            },
+            {
+              id: 2,
+              title: `Post by marketing author`,
+              authorId: 2,
+              published: true,
+            },
+            {
+              id: 3,
+              title: `Draft by eng author`,
+              authorId: 1,
+              published: false,
+            },
+          ],
+          syncMode: `on-demand`,
+          sync: {
+            sync: ({ begin, write, commit, markReady }) => {
+              begin()
+              write({
+                type: `insert`,
+                value: {
+                  id: 1,
+                  title: `Post by eng author`,
+                  authorId: 1,
+                  published: true,
+                },
+              })
+              write({
+                type: `insert`,
+                value: {
+                  id: 2,
+                  title: `Post by marketing author`,
+                  authorId: 2,
+                  published: true,
+                },
+              })
+              write({
+                type: `insert`,
+                value: {
+                  id: 3,
+                  title: `Draft by eng author`,
+                  authorId: 1,
+                  published: false,
+                },
+              })
+              commit()
+              markReady()
+              return {
+                loadSubset: (options: LoadSubsetOptions) => {
+                  loadSubsetCalls.push(options)
+                  return true
+                },
+              }
+            },
+          },
+        }),
+      )
+
+      return { collection, loadSubsetCalls }
+    }
+
+    function createAuthorsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection(
+        mockSyncCollectionOptions<Author>({
+          id: `authors-predicate-aware-join`,
+          getKey: (author) => author.id,
+          initialData: [
+            { id: 1, departmentId: 1, name: `Alice` },
+            { id: 2, departmentId: 2, name: `Bob` },
+            { id: 3, departmentId: 2, name: `Charlie` },
+            { id: 4, departmentId: 3, name: `Dana` },
+            { id: 5, departmentId: 3, name: `Eve` },
+            { id: 6, departmentId: 3, name: `Frank` },
+          ],
+          syncMode: `on-demand`,
+          sync: {
+            sync: ({ begin, write, commit, markReady }) => {
+              begin()
+              write({
+                type: `insert`,
+                value: { id: 1, departmentId: 1, name: `Alice` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 2, departmentId: 2, name: `Bob` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 3, departmentId: 2, name: `Charlie` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 4, departmentId: 3, name: `Dana` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 5, departmentId: 3, name: `Eve` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 6, departmentId: 3, name: `Frank` },
+              })
+              commit()
+              markReady()
+              return {
+                loadSubset: (options: LoadSubsetOptions) => {
+                  loadSubsetCalls.push(options)
+                  return true
+                },
+              }
+            },
+          },
+        }),
+      )
+
+      return { collection, loadSubsetCalls }
+    }
+
+    it(`lets a filtered joined subquery drive parent subset loading for inner joins`, async () => {
+      const { collection: posts, loadSubsetCalls: postSubsetCalls } =
+        createPostsCollectionWithTracking()
+      const { collection: authors, loadSubsetCalls: authorSubsetCalls } =
+        createAuthorsCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) => {
+        const engineeringAuthors = q
+          .from({ author: authors })
+          .where(({ author }) => eq(author.departmentId, 1))
+
+        return q
+          .from({ post: posts })
+          .join(
+            { author: engineeringAuthors },
+            ({ post, author }) => eq(post.authorId, author.id),
+            `inner`,
+          )
+      })
+
+      await query.preload()
+      await flushPromises()
+
+      const postCallWithIn = postSubsetCalls.find(
+        (options) => findExprByName(options.where, `in`) !== undefined,
+      )
+      expect(postCallWithIn?.where).toBeDefined()
+
+      const postInExpr = findExprByName(postCallWithIn?.where, `in`)
+      expect(postInExpr).toBeDefined()
+      expect(getInValues(postInExpr!)).toEqual([1])
+
+      const authorEqExpr = authorSubsetCalls
+        .map((options) => findExprByName(options.where, `eq`))
+        .find((expr) => expr !== undefined)
+      expect(authorEqExpr).toBeDefined()
+    })
+  })
+
   describe(`includes subset loading`, () => {
     type Project = {
       id: number | null

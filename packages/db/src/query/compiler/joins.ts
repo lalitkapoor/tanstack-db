@@ -14,8 +14,11 @@ import {
 import { normalizeValue } from '../../utils/comparison.js'
 import { ensureIndexForField } from '../../indexes/auto-index.js'
 import { PropRef, followRef } from '../ir.js'
-import { inArray } from '../builder/functions.js'
 import { compileExpression } from './evaluators.js'
+import {
+  collectDistinctNonNullKeys,
+  requestCorrelatedSubsetSnapshot,
+} from './correlated-subset-loading.js'
 import type { CompileQueryFn } from './index.js'
 import type { OrderByOptimizationInfo } from './order-by.js'
 import type {
@@ -170,6 +173,12 @@ function processJoin(
     joinClause.type,
     mainCollection,
     joinedCollection,
+    {
+      mainAlias: mainSource,
+      joinedAlias: joinedSource,
+      aliasRemapping,
+      sourceWhereClauses,
+    },
   )
 
   // Analyze which source each expression refers to and swap if necessary
@@ -303,37 +312,29 @@ function processJoin(
           }
 
           // Deduplicate and filter null keys before requesting snapshot
-          const joinKeys = [
-            ...new Set(
-              data
-                .getInner()
-                .map(([[joinKey]]) => joinKey)
-                .filter((key) => key != null),
-            ),
-          ]
-
-          if (joinKeys.length === 0) {
-            return
-          }
+          const joinKeys = collectDistinctNonNullKeys(
+            data.getInner(),
+            ([joinKey]) => joinKey,
+          )
 
           const lazyJoinRef = new PropRef(followRefResult.path)
-          const loaded = lazySourceSubscription.requestSnapshot({
-            where: inArray(lazyJoinRef, joinKeys),
-            optimizedOnly: true,
-          })
-
-          if (!loaded) {
-            // Snapshot wasn't sent because it could not be loaded from the indexes
-            const collectionId = followRefCollection.id
-            const fieldPath = followRefResult.path.join(`.`)
-            console.warn(
-              `[TanStack DB]${collectionId ? ` [${collectionId}]` : ``} Join requires an index on "${fieldPath}" for efficient loading. ` +
-                `Falling back to loading all data. ` +
-                `Consider creating an index on the collection with collection.createIndex((row) => row.${fieldPath}) ` +
-                `or enable auto-indexing with autoIndex: 'eager' and a defaultIndexType.`,
-            )
-            lazySourceSubscription.requestSnapshot()
-          }
+          requestCorrelatedSubsetSnapshot(
+            lazySourceSubscription,
+            lazyJoinRef,
+            joinKeys,
+            () => {
+              // Snapshot wasn't sent because it could not be loaded from the indexes
+              const collectionId = followRefCollection.id
+              const fieldPath = followRefResult.path.join(`.`)
+              console.warn(
+                `[TanStack DB]${collectionId ? ` [${collectionId}]` : ``} Join requires an index on "${fieldPath}" for efficient loading. ` +
+                  `Falling back to loading all data. ` +
+                  `Consider creating an index on the collection with collection.createIndex((row) => row.${fieldPath}) ` +
+                  `or enable auto-indexing with autoIndex: 'eager' and a defaultIndexType.`,
+              )
+              lazySourceSubscription.requestSnapshot()
+            },
+          )
         }),
       )
 
@@ -639,6 +640,12 @@ function getActiveAndLazySources(
   joinType: JoinClause[`type`],
   leftCollection: Collection,
   rightCollection: Collection,
+  options: {
+    mainAlias: string
+    joinedAlias: string
+    aliasRemapping: Record<string, string>
+    sourceWhereClauses: Map<string, BasicExpression<boolean>>
+  },
 ):
   | { activeSource: `main` | `joined`; lazySource: Collection }
   | { activeSource: undefined; lazySource: undefined } {
@@ -651,6 +658,23 @@ function getActiveAndLazySources(
     case `right`:
       return { activeSource: `joined`, lazySource: leftCollection }
     case `inner`:
+      {
+        const resolvedMainAlias =
+          options.aliasRemapping[options.mainAlias] || options.mainAlias
+        const resolvedJoinedAlias =
+          options.aliasRemapping[options.joinedAlias] || options.joinedAlias
+        const mainHasPredicate =
+          options.sourceWhereClauses.has(resolvedMainAlias)
+        const joinedHasPredicate =
+          options.sourceWhereClauses.has(resolvedJoinedAlias)
+
+        if (mainHasPredicate !== joinedHasPredicate) {
+          return mainHasPredicate
+            ? { activeSource: `main`, lazySource: rightCollection }
+            : { activeSource: `joined`, lazySource: leftCollection }
+        }
+      }
+
       // The smallest collection should be the active collection
       // and the biggest collection should be lazy
       return leftCollection.size < rightCollection.size
