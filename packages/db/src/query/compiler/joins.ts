@@ -14,8 +14,8 @@ import {
 import { normalizeValue } from '../../utils/comparison.js'
 import { ensureIndexForField } from '../../indexes/auto-index.js'
 import { PropRef, followRef } from '../ir.js'
+import { inArray } from '../builder/functions.js'
 import { compileExpression } from './evaluators.js'
-import { requestCorrelatedSubsetSnapshot } from './correlated-subset-loading.js'
 import type { CompileQueryFn } from './index.js'
 import type { OrderByOptimizationInfo } from './order-by.js'
 import type {
@@ -329,24 +329,28 @@ function processJoin(
             ),
           ]
 
+          if (joinKeys.length === 0) {
+            return
+          }
+
           const lazyJoinRef = new PropRef(followRefResult.path)
-          requestCorrelatedSubsetSnapshot(
-            lazySourceSubscription,
-            lazyJoinRef,
-            joinKeys,
-            () => {
-              // Snapshot wasn't sent because it could not be loaded from the indexes
-              const collectionId = followRefCollection.id
-              const fieldPath = followRefResult.path.join(`.`)
-              console.warn(
-                `[TanStack DB]${collectionId ? ` [${collectionId}]` : ``} Join requires an index on "${fieldPath}" for efficient loading. ` +
-                  `Falling back to loading all data. ` +
-                  `Consider creating an index on the collection with collection.createIndex((row) => row.${fieldPath}) ` +
-                  `or enable auto-indexing with autoIndex: 'eager' and a defaultIndexType.`,
-              )
-              lazySourceSubscription.requestSnapshot()
-            },
-          )
+          const loaded = lazySourceSubscription.requestSnapshot({
+            where: inArray(lazyJoinRef, joinKeys),
+            optimizedOnly: true,
+          })
+
+          if (!loaded) {
+            // Snapshot wasn't sent because it could not be loaded from the indexes
+            const collectionId = followRefCollection.id
+            const fieldPath = followRefResult.path.join(`.`)
+            console.warn(
+              `[TanStack DB]${collectionId ? ` [${collectionId}]` : ``} Join requires an index on "${fieldPath}" for efficient loading. ` +
+                `Falling back to loading all data. ` +
+                `Consider creating an index on the collection with collection.createIndex((row) => row.${fieldPath}) ` +
+                `or enable auto-indexing with autoIndex: 'eager' and a defaultIndexType.`,
+            )
+            lazySourceSubscription.requestSnapshot()
+          }
         }),
       )
 

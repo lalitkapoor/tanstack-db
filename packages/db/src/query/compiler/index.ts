@@ -24,12 +24,12 @@ import {
   Value as ValClass,
   getWhereExpression,
 } from '../ir.js'
+import { inArray } from '../builder/functions.js'
 import { compileExpression, toBooleanPredicate } from './evaluators.js'
 import { processJoins } from './joins.js'
 import { containsAggregate, processGroupBy } from './group-by.js'
 import { processOrderBy } from './order-by.js'
 import { processSelect } from './select.js'
-import { requestCorrelatedSubsetSnapshot } from './correlated-subset-loading.js'
 import type { CollectionSubscription } from '../../collection/subscription.js'
 import type { OrderByOptimizationInfo } from './order-by.js'
 import type {
@@ -243,14 +243,18 @@ export function compileQuery(
           ),
         ]
 
-        requestCorrelatedSubsetSnapshot(
-          childSourceSubscription,
-          new PropRef(childFieldPath),
-          correlationKeys,
-          () => {
-            childSourceSubscription.requestSnapshot()
-          },
-        )
+        if (correlationKeys.length === 0) {
+          return
+        }
+
+        const loaded = childSourceSubscription.requestSnapshot({
+          where: inArray(new PropRef(childFieldPath), correlationKeys),
+          optimizedOnly: true,
+        })
+
+        if (!loaded) {
+          childSourceSubscription.requestSnapshot()
+        }
       }),
     )
 
