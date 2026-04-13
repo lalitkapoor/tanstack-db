@@ -29,10 +29,7 @@ import { processJoins } from './joins.js'
 import { containsAggregate, processGroupBy } from './group-by.js'
 import { processOrderBy } from './order-by.js'
 import { processSelect } from './select.js'
-import {
-  collectDistinctNonNullKeys,
-  requestCorrelatedSubsetSnapshot,
-} from './correlated-subset-loading.js'
+import { requestCorrelatedSubsetSnapshot } from './correlated-subset-loading.js'
 import type { CollectionSubscription } from '../../collection/subscription.js'
 import type { OrderByOptimizationInfo } from './order-by.js'
 import type {
@@ -237,10 +234,14 @@ export function compileQuery(
           return
         }
 
-        const correlationKeys = collectDistinctNonNullKeys(
-          data.getInner(),
-          ([correlationKey]) => correlationKey,
-        )
+        const correlationKeys = [
+          ...new Set(
+            data
+              .getInner()
+              .map(([[correlationKey]]) => correlationKey)
+              .filter((correlationKey) => correlationKey != null),
+          ),
+        ]
 
         requestCorrelatedSubsetSnapshot(
           childSourceSubscription,

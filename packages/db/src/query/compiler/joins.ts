@@ -15,10 +15,7 @@ import { normalizeValue } from '../../utils/comparison.js'
 import { ensureIndexForField } from '../../indexes/auto-index.js'
 import { PropRef, followRef } from '../ir.js'
 import { compileExpression } from './evaluators.js'
-import {
-  collectDistinctNonNullKeys,
-  requestCorrelatedSubsetSnapshot,
-} from './correlated-subset-loading.js'
+import { requestCorrelatedSubsetSnapshot } from './correlated-subset-loading.js'
 import type { CompileQueryFn } from './index.js'
 import type { OrderByOptimizationInfo } from './order-by.js'
 import type {
@@ -323,10 +320,14 @@ function processJoin(
           }
 
           // Deduplicate and filter null keys before requesting snapshot
-          const joinKeys = collectDistinctNonNullKeys(
-            data.getInner(),
-            ([joinKey]) => joinKey,
-          )
+          const joinKeys = [
+            ...new Set(
+              data
+                .getInner()
+                .map(([[joinKey]]) => joinKey)
+                .filter((key) => key != null),
+            ),
+          ]
 
           const lazyJoinRef = new PropRef(followRefResult.path)
           requestCorrelatedSubsetSnapshot(
