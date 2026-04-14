@@ -19,7 +19,6 @@ import {
 import type {
   PersistedCollectionCoordinator,
   PersistedCollectionPersistence,
-  PersistedIndexState,
   PersistedSyncWrappedOptions,
   PersistenceAdapter,
   ProtocolEnvelope,
@@ -58,12 +57,12 @@ type RecordingAdapter = PersistenceAdapter & {
   rows: Map<string, Todo>
   rowMetadata: Map<string, unknown>
   collectionMetadata: Map<string, unknown>
-  persistedIndexes: Map<string, PersistedIndexState>
+  persistedIndexes: Set<string>
 }
 
 function createRecordingAdapter(
   initialRows: Array<Todo> = [],
-  initialIndexes: Array<PersistedIndexState> = [],
+  initialIndexes: Array<string> = [],
 ): RecordingAdapter {
   const rows = new Map(initialRows.map((row) => [row.id, row]))
   const rowMetadata = new Map<string, unknown>()
@@ -77,9 +76,7 @@ function createRecordingAdapter(
     markIndexRemovedCalls: [],
     loadSubsetCalls: [],
     loadCollectionMetadataCalls: [],
-    persistedIndexes: new Map(
-      initialIndexes.map((indexState) => [indexState.signature, indexState]),
-    ),
+    persistedIndexes: new Set(initialIndexes),
     loadSubset: (collectionId, options, ctx) => {
       adapter.loadSubsetCalls.push({
         collectionId,
@@ -114,15 +111,7 @@ function createRecordingAdapter(
         })),
       ),
     listIndexes: () =>
-      Promise.resolve(
-        Array.from(adapter.persistedIndexes.values()).map((indexState) => ({
-          signature: indexState.signature,
-          expressionSql: [...indexState.expressionSql],
-          ...(indexState.whereSql === undefined
-            ? {}
-            : { whereSql: indexState.whereSql }),
-        })),
-      ),
+      Promise.resolve(Array.from(adapter.persistedIndexes.values())),
     applyCommittedTx: (collectionId, tx) => {
       adapter.applyCommittedTxCalls.push({
         collectionId,
@@ -176,13 +165,9 @@ function createRecordingAdapter(
       }
       return Promise.resolve()
     },
-    ensureIndex: (collectionId, signature, spec) => {
+    ensureIndex: (collectionId, signature, _spec) => {
       adapter.ensureIndexCalls.push({ collectionId, signature })
-      adapter.persistedIndexes.set(signature, {
-        signature,
-        expressionSql: [...spec.expressionSql],
-        ...(spec.whereSql === undefined ? {} : { whereSql: spec.whereSql }),
-      })
+      adapter.persistedIndexes.add(signature)
       return Promise.resolve()
     },
     markIndexRemoved: (collectionId, signature) => {
@@ -923,15 +908,11 @@ describe(`persistedCollectionOptions`, () => {
     const adapter = createRecordingAdapter()
     let resolveEnsureIndex: (() => void) | undefined
 
-    adapter.ensureIndex = (collectionId, signature, spec) => {
+    adapter.ensureIndex = (collectionId, signature) => {
       adapter.ensureIndexCalls.push({ collectionId, signature })
       return new Promise<void>((resolve) => {
         resolveEnsureIndex = () => {
-          adapter.persistedIndexes.set(signature, {
-            signature,
-            expressionSql: [...spec.expressionSql],
-            ...(spec.whereSql === undefined ? {} : { whereSql: spec.whereSql }),
-          })
+          adapter.persistedIndexes.add(signature)
           resolve()
         }
       })
@@ -976,15 +957,7 @@ describe(`persistedCollectionOptions`, () => {
 
   it(`removes stale persisted indexes on restart before ensuring current ones`, async () => {
     const staleSignature = `stale-signature`
-    const adapter = createRecordingAdapter(
-      [],
-      [
-        {
-          signature: staleSignature,
-          expressionSql: [`{"type":"ref","path":["legacy"]}`],
-        },
-      ],
-    )
+    const adapter = createRecordingAdapter([], [staleSignature])
 
     const collection = createCollection(
       persistedCollectionOptions<Todo, string>({
@@ -1021,114 +994,9 @@ describe(`persistedCollectionOptions`, () => {
         (call) => call.signature === desiredSignature,
       ),
     ).toBe(true)
-    expect(Array.from(adapter.persistedIndexes.keys())).toEqual([
+    expect(Array.from(adapter.persistedIndexes.values())).toEqual([
       desiredSignature,
     ])
-  })
-
-  it(`recreates a persisted index when the stored definition mismatches the signature`, async () => {
-    const adapter = createRecordingAdapter()
-    const collection = createCollection(
-      persistedCollectionOptions<Todo, string>({
-        id: `sync-present-index-definition-mismatch`,
-        getKey: (item) => item.id,
-        defaultIndexType: BasicIndex,
-        sync: {
-          sync: ({ markReady }) => {
-            markReady()
-          },
-        },
-        persistence: {
-          adapter,
-        },
-      }),
-    )
-
-    const index = collection.createIndex((row) => row.title, {
-      name: `title-index`,
-    })
-    const signature = collection
-      .getIndexMetadata()
-      .find((metadata) => metadata.indexId === index.id)?.signature
-
-    if (!signature) {
-      throw new Error(`Expected a signature for the title index`)
-    }
-
-    adapter.persistedIndexes.set(signature, {
-      signature,
-      expressionSql: [`{"type":"ref","path":["otherField"]}`],
-    })
-
-    await collection.preload()
-    await flushAsyncWork()
-
-    expect(
-      adapter.markIndexRemovedCalls.some(
-        (call) => call.signature === signature,
-      ),
-    ).toBe(true)
-    expect(
-      adapter.ensureIndexCalls.some((call) => call.signature === signature),
-    ).toBe(true)
-  })
-
-  it(`does not rewrite a mismatched persisted index when removal fails`, async () => {
-    const adapter = createRecordingAdapter()
-    const collection = createCollection(
-      persistedCollectionOptions<Todo, string>({
-        id: `sync-present-index-definition-removal-failure`,
-        getKey: (item) => item.id,
-        defaultIndexType: BasicIndex,
-        sync: {
-          sync: ({ markReady }) => {
-            markReady()
-          },
-        },
-        persistence: {
-          adapter,
-        },
-      }),
-    )
-
-    const index = collection.createIndex((row) => row.title, {
-      name: `title-index`,
-    })
-    const signature = collection
-      .getIndexMetadata()
-      .find((metadata) => metadata.indexId === index.id)?.signature
-
-    if (!signature) {
-      throw new Error(`Expected a signature for the title index`)
-    }
-
-    adapter.persistedIndexes.set(signature, {
-      signature,
-      expressionSql: [`{"type":"ref","path":["otherField"]}`],
-    })
-    adapter.markIndexRemoved = async (collectionId, staleSignature) => {
-      adapter.markIndexRemovedCalls.push({
-        collectionId,
-        signature: staleSignature,
-      })
-      throw new Error(`drop failed`)
-    }
-
-    await collection.preload()
-    await flushAsyncWork()
-
-    expect(
-      adapter.markIndexRemovedCalls.some(
-        (call) => call.signature === signature,
-      ),
-    ).toBe(true)
-    expect(
-      adapter.ensureIndexCalls.some((call) => call.signature === signature),
-    ).toBe(false)
-    expect(adapter.persistedIndexes.get(signature)).toEqual({
-      signature,
-      expressionSql: [`{"type":"ref","path":["otherField"]}`],
-    })
   })
 
   it(`queues remote sync writes that arrive during hydration`, async () => {
@@ -1216,9 +1084,7 @@ describe(`persistedCollectionOptions`, () => {
 
   it(`marks ready even when persisted startup fails before markReady`, async () => {
     const adapter = createRecordingAdapter()
-    adapter.loadSubset = async () => {
-      throw new Error(`startup failure`)
-    }
+    adapter.loadSubset = () => Promise.reject(new Error(`startup failure`))
 
     const collection = createCollection(
       persistedCollectionOptions<Todo, string>({
@@ -1560,11 +1426,12 @@ describe(`persistedCollectionOptions`, () => {
       isLeader: () => true,
       ensureLeadership: async () => {},
       requestEnsurePersistedIndex: async () => {},
-      requestEnsureRemoteSubset: async () => {
+      requestEnsureRemoteSubset: () => {
         ensureCalls++
         if (ensureCalls === 1) {
-          throw new Error(`offline`)
+          return Promise.reject(new Error(`offline`))
         }
+        return Promise.resolve()
       },
     }
 
@@ -1604,15 +1471,16 @@ describe(`persistedCollectionOptions`, () => {
       isLeader: () => false,
       ensureLeadership: async () => {},
       requestEnsurePersistedIndex: async () => {},
-      requestApplyLocalMutations: async () => ({
-        type: `rpc:applyLocalMutations:res`,
-        rpcId: `ack-1`,
-        ok: true,
-        term: 1,
-        seq: 1,
-        latestRowVersion: 1,
-        acceptedMutationIds: [],
-      }),
+      requestApplyLocalMutations: () =>
+        Promise.resolve({
+          type: `rpc:applyLocalMutations:res`,
+          rpcId: `ack-1`,
+          ok: true,
+          term: 1,
+          seq: 1,
+          latestRowVersion: 1,
+          acceptedMutationIds: [],
+        }),
     }
 
     const collection = createCollection(

@@ -964,7 +964,7 @@ export function runSQLiteCoreAdapterContractSuite(
       expect(sqliteMasterAfter).toHaveLength(0)
     })
 
-    it(`lists active persisted indexes from the registry`, async () => {
+    it(`lists active persisted index signatures from the registry`, async () => {
       const { adapter } = registerContractHarness()
       const collectionId = `todos`
 
@@ -993,13 +993,7 @@ export function runSQLiteCoreAdapterContractSuite(
       }
 
       const indexes = await adapter.listIndexes(collectionId)
-      expect(indexes).toEqual([
-        {
-          signature: `idx-score`,
-          expressionSql: [`json_extract(value, '$.score')`],
-          whereSql: `json_extract(value, '$.score') IS NOT NULL`,
-        },
-      ])
+      expect(indexes).toEqual([`idx-score`])
     })
 
     it(`enforces schema mismatch policies`, async () => {

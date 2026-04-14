@@ -178,12 +178,6 @@ export interface PersistedIndexSpec {
   readonly metadata?: Readonly<Record<string, unknown>>
 }
 
-export type PersistedIndexState = {
-  readonly signature: string
-  readonly expressionSql: ReadonlyArray<string>
-  readonly whereSql?: string
-}
-
 export type PersistedRowMetadataMutation<
   TKey extends string | number = string | number,
 > = { type: `set`; key: TKey; value: unknown } | { type: `delete`; key: TKey }
@@ -267,7 +261,7 @@ export interface PersistenceAdapter {
     collectionId: string,
     options?: PersistedRowScanOptions,
   ) => Promise<Array<PersistedScannedRow>>
-  listIndexes?: (collectionId: string) => Promise<Array<PersistedIndexState>>
+  listIndexes?: (collectionId: string) => Promise<Array<string>>
   ensureIndex: (
     collectionId: string,
     signature: string,
@@ -701,33 +695,6 @@ function toStableSerializable(value: unknown): unknown {
 
 function stableSerialize(value: unknown): string {
   return JSON.stringify(toStableSerializable(value) ?? null)
-}
-
-function toPersistedIndexState(
-  signature: string,
-  spec: Pick<PersistedIndexSpec, `expressionSql` | `whereSql`>,
-): PersistedIndexState {
-  return {
-    signature,
-    expressionSql: [...spec.expressionSql],
-    ...(spec.whereSql === undefined ? {} : { whereSql: spec.whereSql }),
-  }
-}
-
-function arePersistedIndexStatesEqual(
-  left: Pick<PersistedIndexState, `expressionSql` | `whereSql`>,
-  right: Pick<PersistedIndexState, `expressionSql` | `whereSql`>,
-): boolean {
-  return (
-    stableSerialize({
-      expressionSql: left.expressionSql,
-      whereSql: left.whereSql ?? null,
-    }) ===
-    stableSerialize({
-      expressionSql: right.expressionSql,
-      whereSql: right.whereSql ?? null,
-    })
-  )
 }
 
 function normalizeSubsetOptionsForKey(
@@ -2035,7 +2002,7 @@ class PersistedCollectionRuntime<
     )
 
     if (!hasPaginatedSubset || changedKeyCount === 0) {
-      await this.applyTargetedInvalidationUnsafe(txCommitted)
+      this.applyTargetedInvalidationUnsafe(txCommitted)
       return
     }
 
@@ -2044,9 +2011,9 @@ class PersistedCollectionRuntime<
     await this.reloadActiveSubsetsUnsafe()
   }
 
-  private async applyTargetedInvalidationUnsafe(
+  private applyTargetedInvalidationUnsafe(
     txCommitted: TxCommitted & { requiresFullReload: false },
-  ): Promise<void> {
+  ): void {
     const subsetEvaluators = Array.from(this.activeSubsets.values()).map(
       (opt) => (opt.where ? compileSingleRowExpression(opt.where) : null),
     )
@@ -2174,65 +2141,34 @@ class PersistedCollectionRuntime<
       return
     }
 
-    const desiredIndexes = new Map<string, PersistedIndexState>()
-    for (const metadata of indexMetadataSnapshot ??
-      collection?.getIndexMetadata() ??
-      []) {
-      desiredIndexes.set(
-        metadata.signature,
-        toPersistedIndexState(
-          metadata.signature,
-          this.buildPersistedIndexSpec(metadata),
-        ),
-      )
-    }
+    const desiredIndexMetadata =
+      indexMetadataSnapshot ?? collection?.getIndexMetadata() ?? []
 
     const listIndexes = this.persistence.adapter.listIndexes
     if (!listIndexes) {
-      for (const [signature, desiredIndex] of desiredIndexes) {
-        await this.ensurePersistedIndexState(signature, desiredIndex)
+      for (const metadata of desiredIndexMetadata) {
+        await this.ensurePersistedIndex(metadata)
       }
       return
     }
 
-    const actualIndexes = await listIndexes(this.collectionId)
-    const actualIndexMap = new Map(
-      actualIndexes.map((indexState) => [indexState.signature, indexState]),
+    const desiredSignatures = new Set(
+      desiredIndexMetadata.map((metadata) => metadata.signature),
     )
-    const blockedSignatures = new Set<string>()
+    const actualSignatures = new Set(await listIndexes(this.collectionId))
 
-    for (const [signature, actualIndex] of actualIndexMap) {
-      const desiredIndex = desiredIndexes.get(signature)
-      if (!desiredIndex) {
+    for (const signature of actualSignatures) {
+      if (!desiredSignatures.has(signature)) {
         await this.markPersistedIndexRemoved(signature)
-        continue
-      }
-
-      if (!arePersistedIndexStatesEqual(actualIndex, desiredIndex)) {
-        const removed = await this.markPersistedIndexRemoved(signature)
-        if (!removed) {
-          blockedSignatures.add(signature)
-          continue
-        }
-
-        actualIndexMap.delete(signature)
       }
     }
 
-    for (const [signature, desiredIndex] of desiredIndexes) {
-      if (blockedSignatures.has(signature)) {
+    for (const metadata of desiredIndexMetadata) {
+      if (actualSignatures.has(metadata.signature)) {
         continue
       }
 
-      const actualIndex = actualIndexMap.get(signature)
-      if (
-        actualIndex &&
-        arePersistedIndexStatesEqual(actualIndex, desiredIndex)
-      ) {
-        continue
-      }
-
-      await this.ensurePersistedIndexState(signature, desiredIndex)
+      await this.ensurePersistedIndex(metadata)
     }
   }
 
@@ -2252,30 +2188,12 @@ class PersistedCollectionRuntime<
   private async ensurePersistedIndex(
     indexMetadata: CollectionIndexMetadata,
   ): Promise<void> {
-    await this.ensurePersistedIndexState(
-      indexMetadata.signature,
-      toPersistedIndexState(
-        indexMetadata.signature,
-        this.buildPersistedIndexSpec(indexMetadata),
-      ),
-    )
-  }
-
-  private async ensurePersistedIndexState(
-    signature: string,
-    indexState: PersistedIndexState,
-  ): Promise<void> {
-    const spec: PersistedIndexSpec = {
-      expressionSql: indexState.expressionSql,
-      ...(indexState.whereSql === undefined
-        ? {}
-        : { whereSql: indexState.whereSql }),
-    }
+    const spec = this.buildPersistedIndexSpec(indexMetadata)
 
     try {
       await this.persistence.adapter.ensureIndex(
         this.collectionId,
-        signature,
+        indexMetadata.signature,
         spec,
       )
     } catch (error: unknown) {
@@ -2285,7 +2203,7 @@ class PersistedCollectionRuntime<
     try {
       await this.persistence.coordinator.requestEnsurePersistedIndex(
         this.collectionId,
-        signature,
+        indexMetadata.signature,
         spec,
       )
     } catch (error: unknown) {
