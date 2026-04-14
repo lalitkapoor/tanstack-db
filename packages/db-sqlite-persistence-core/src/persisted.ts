@@ -2196,7 +2196,7 @@ class PersistedCollectionRuntime<
         indexMetadata.signature,
         spec,
       )
-    } catch (error: unknown) {
+    } catch (error) {
       console.warn(`Failed to ensure persisted index in adapter:`, error)
     }
 
@@ -2206,7 +2206,7 @@ class PersistedCollectionRuntime<
         indexMetadata.signature,
         spec,
       )
-    } catch (error: unknown) {
+    } catch (error) {
       console.warn(
         `Failed to ensure persisted index through coordinator:`,
         error,
@@ -2231,7 +2231,7 @@ class PersistedCollectionRuntime<
         signature,
       )
       return true
-    } catch (error: unknown) {
+    } catch (error) {
       console.warn(`Failed to mark persisted index removed:`, error)
       return false
     }
