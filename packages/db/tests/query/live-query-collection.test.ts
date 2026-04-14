@@ -2791,6 +2791,557 @@ describe(`createLiveQueryCollection`, () => {
     })
   })
 
+  describe(`predicate-aware inner join subset loading`, () => {
+    type Post = {
+      id: number
+      title: string
+      authorId: number | null
+      published: boolean
+    }
+
+    type Author = {
+      id: number
+      departmentId: number
+      name: string
+    }
+
+    const findExprByName = (
+      expr: LoadSubsetOptions[`where`],
+      name: string,
+    ): Func | undefined => {
+      if (!(expr instanceof Func)) return undefined
+      if (expr.name === name) return expr
+      if (expr.name === `and` || expr.name === `or`) {
+        for (const arg of expr.args) {
+          const found = findExprByName(arg, name)
+          if (found) return found
+        }
+      }
+      return undefined
+    }
+
+    const getInValues = (expr: Func): Array<number> => {
+      const arrayArg = expr.args[1]
+      expect(arrayArg).toBeInstanceOf(Value)
+      const valuesArg = arrayArg as Value<Array<number>>
+      return valuesArg.value.slice().sort((a, b) => a - b)
+    }
+
+    function createPostsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection(
+        mockSyncCollectionOptions<Post>({
+          id: `posts-predicate-aware-join`,
+          getKey: (post) => post.id,
+          initialData: [
+            {
+              id: 1,
+              title: `Post by eng author`,
+              authorId: 1,
+              published: true,
+            },
+            {
+              id: 2,
+              title: `Post by marketing author`,
+              authorId: 2,
+              published: true,
+            },
+            {
+              id: 3,
+              title: `Draft by eng author`,
+              authorId: 1,
+              published: false,
+            },
+          ],
+          syncMode: `on-demand`,
+          sync: {
+            sync: ({ begin, write, commit, markReady }) => {
+              begin()
+              write({
+                type: `insert`,
+                value: {
+                  id: 1,
+                  title: `Post by eng author`,
+                  authorId: 1,
+                  published: true,
+                },
+              })
+              write({
+                type: `insert`,
+                value: {
+                  id: 2,
+                  title: `Post by marketing author`,
+                  authorId: 2,
+                  published: true,
+                },
+              })
+              write({
+                type: `insert`,
+                value: {
+                  id: 3,
+                  title: `Draft by eng author`,
+                  authorId: 1,
+                  published: false,
+                },
+              })
+              commit()
+              markReady()
+              return {
+                loadSubset: (options: LoadSubsetOptions) => {
+                  loadSubsetCalls.push(options)
+                  return true
+                },
+              }
+            },
+          },
+        }),
+      )
+
+      return { collection, loadSubsetCalls }
+    }
+
+    function createAuthorsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection(
+        mockSyncCollectionOptions<Author>({
+          id: `authors-predicate-aware-join`,
+          getKey: (author) => author.id,
+          initialData: [
+            { id: 1, departmentId: 1, name: `Alice` },
+            { id: 2, departmentId: 2, name: `Bob` },
+            { id: 3, departmentId: 2, name: `Charlie` },
+            { id: 4, departmentId: 3, name: `Dana` },
+            { id: 5, departmentId: 3, name: `Eve` },
+            { id: 6, departmentId: 3, name: `Frank` },
+          ],
+          syncMode: `on-demand`,
+          sync: {
+            sync: ({ begin, write, commit, markReady }) => {
+              begin()
+              write({
+                type: `insert`,
+                value: { id: 1, departmentId: 1, name: `Alice` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 2, departmentId: 2, name: `Bob` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 3, departmentId: 2, name: `Charlie` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 4, departmentId: 3, name: `Dana` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 5, departmentId: 3, name: `Eve` },
+              })
+              write({
+                type: `insert`,
+                value: { id: 6, departmentId: 3, name: `Frank` },
+              })
+              commit()
+              markReady()
+              return {
+                loadSubset: (options: LoadSubsetOptions) => {
+                  loadSubsetCalls.push(options)
+                  return true
+                },
+              }
+            },
+          },
+        }),
+      )
+
+      return { collection, loadSubsetCalls }
+    }
+
+    it(`lets a filtered joined subquery drive parent subset loading for inner joins`, async () => {
+      const { collection: posts, loadSubsetCalls: postSubsetCalls } =
+        createPostsCollectionWithTracking()
+      const { collection: authors, loadSubsetCalls: authorSubsetCalls } =
+        createAuthorsCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) => {
+        const engineeringAuthors = q
+          .from({ author: authors })
+          .where(({ author }) => eq(author.departmentId, 1))
+
+        return q
+          .from({ post: posts })
+          .join(
+            { author: engineeringAuthors },
+            ({ post, author }) => eq(post.authorId, author.id),
+            `inner`,
+          )
+      })
+
+      await query.preload()
+      await flushPromises()
+
+      const postCallWithIn = postSubsetCalls.find(
+        (options) => findExprByName(options.where, `in`) !== undefined,
+      )
+      expect(postCallWithIn?.where).toBeDefined()
+
+      const postInExpr = findExprByName(postCallWithIn?.where, `in`)
+      expect(postInExpr).toBeDefined()
+      expect(getInValues(postInExpr!)).toEqual([1])
+
+      const authorEqExpr = authorSubsetCalls
+        .map((options) => findExprByName(options.where, `eq`))
+        .find((expr) => expr !== undefined)
+      expect(authorEqExpr).toBeDefined()
+    })
+  })
+
+  describe(`includes subset loading`, () => {
+    type Project = {
+      id: number | null
+      name: string
+    }
+
+    type Issue = {
+      id: number
+      projectId: number | null
+      title: string
+      severity: `low` | `high`
+    }
+
+    type Comment = {
+      id: number
+      issueId: number | null
+      body: string
+    }
+
+    const findExprByName = (
+      expr: LoadSubsetOptions[`where`],
+      name: string,
+    ): Func | undefined => {
+      if (!(expr instanceof Func)) return undefined
+      if (expr.name === name) return expr
+      if (expr.name === `and` || expr.name === `or`) {
+        for (const arg of expr.args) {
+          const found = findExprByName(arg, name)
+          if (found) return found
+        }
+      }
+      return undefined
+    }
+
+    const getInValues = (expr: Func): Array<number> => {
+      const arrayArg = expr.args[1]
+      expect(arrayArg).toBeInstanceOf(Value)
+      const valuesArg = arrayArg as Value<Array<number>>
+      return valuesArg.value.slice().sort((a, b) => a - b)
+    }
+
+    function createProjectsCollectionForIncludes() {
+      return createCollection<Project>({
+        id: `includes-projects-subset`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({ type: `insert`, value: { id: 10, name: `Alpha` } })
+            write({ type: `insert`, value: { id: 20, name: `Beta` } })
+            write({ type: `insert`, value: { id: null, name: `Unassigned` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createProjectsCollectionWithoutNullForIncludes() {
+      return createCollection<Project>({
+        id: `includes-projects-subset-no-null`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({ type: `insert`, value: { id: 10, name: `Alpha` } })
+            write({ type: `insert`, value: { id: 20, name: `Beta` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createNullProjectsCollectionForIncludes() {
+      return createCollection<Project>({
+        id: `includes-projects-subset-null-only`,
+        getKey: (project) => String(project.id),
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({ type: `insert`, value: { id: null, name: `Unassigned A` } })
+            write({ type: `insert`, value: { id: null, name: `Unassigned B` } })
+            commit()
+            markReady()
+          },
+        },
+      })
+    }
+
+    function createIssuesCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection<Issue>({
+        id: `includes-issues-subset`,
+        getKey: (issue) => issue.id,
+        syncMode: `on-demand`,
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({
+              type: `insert`,
+              value: {
+                id: 1,
+                projectId: 10,
+                title: `P1 high`,
+                severity: `high`,
+              },
+            })
+            write({
+              type: `insert`,
+              value: { id: 2, projectId: 10, title: `P1 low`, severity: `low` },
+            })
+            write({
+              type: `insert`,
+              value: {
+                id: 3,
+                projectId: 20,
+                title: `P2 high`,
+                severity: `high`,
+              },
+            })
+            write({
+              type: `insert`,
+              value: {
+                id: 4,
+                projectId: null,
+                title: `No project high`,
+                severity: `high`,
+              },
+            })
+            commit()
+            markReady()
+            return {
+              loadSubset: (options: LoadSubsetOptions) => {
+                loadSubsetCalls.push(options)
+                return true
+              },
+            }
+          },
+        },
+      })
+
+      return { collection, loadSubsetCalls }
+    }
+
+    function createCommentsCollectionWithTracking() {
+      const loadSubsetCalls: Array<LoadSubsetOptions> = []
+
+      const collection = createCollection<Comment>({
+        id: `includes-comments-subset`,
+        getKey: (comment) => comment.id,
+        syncMode: `on-demand`,
+        sync: {
+          sync: ({ begin, write, commit, markReady }) => {
+            begin()
+            write({
+              type: `insert`,
+              value: { id: 101, issueId: 1, body: `Issue 1 comment` },
+            })
+            write({
+              type: `insert`,
+              value: { id: 102, issueId: 3, body: `Issue 3 comment` },
+            })
+            write({
+              type: `insert`,
+              value: { id: 103, issueId: null, body: `Unassigned comment` },
+            })
+            commit()
+            markReady()
+            return {
+              loadSubset: (options: LoadSubsetOptions) => {
+                loadSubsetCalls.push(options)
+                return true
+              },
+            }
+          },
+        },
+      })
+
+      return { collection, loadSubsetCalls }
+    }
+
+    it(`requests includes children with an inArray of deduped non-null parent keys`, async () => {
+      const projects = createProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          name: p.name,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+              title: i.title,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      const inExpr = loadSubsetCalls
+        .map((options) => findExprByName(options.where, `in`))
+        .find((expr) => expr !== undefined)
+
+      expect(inExpr).toBeDefined()
+      expect(getInValues(inExpr!)).toEqual([10, 20])
+    })
+
+    it(`combines child predicates with includes inArray subset loading`, async () => {
+      const projects = createProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          name: p.name,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .where(({ i }) => eq(i.severity, `high`))
+            .select(({ i }) => ({
+              id: i.id,
+              title: i.title,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      const callWithWhere = loadSubsetCalls.find(
+        (options) => options.where != null,
+      )
+
+      expect(callWithWhere?.where).toBeDefined()
+
+      const inExpr = findExprByName(callWithWhere?.where, `in`)
+      const eqExpr = findExprByName(callWithWhere?.where, `eq`)
+
+      expect(inExpr).toBeDefined()
+      expect(getInValues(inExpr!)).toEqual([10, 20])
+      expect(eqExpr).toBeDefined()
+    })
+
+    it(`does not request child subsets when every parent correlation key is null`, async () => {
+      const projects = createNullProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      expect(loadSubsetCalls).toEqual([])
+    })
+
+    it(`falls back to a broad child snapshot when optimized includes subset loading fails`, async () => {
+      const projects = createProjectsCollectionForIncludes()
+      const { collection: issues, loadSubsetCalls } =
+        createIssuesCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .select(({ i }) => ({
+              id: i.id,
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      expect(loadSubsetCalls).toHaveLength(2)
+      expect(loadSubsetCalls[0]?.where).toBeDefined()
+      expect(findExprByName(loadSubsetCalls[0]?.where, `in`)).toBeDefined()
+      expect(loadSubsetCalls[1]?.where).toBeUndefined()
+    })
+
+    it(`applies subset loading recursively for nested includes`, async () => {
+      const projects = createProjectsCollectionWithoutNullForIncludes()
+      const { collection: issues, loadSubsetCalls: issueSubsetCalls } =
+        createIssuesCollectionWithTracking()
+      const { collection: comments, loadSubsetCalls: commentSubsetCalls } =
+        createCommentsCollectionWithTracking()
+
+      const query = createLiveQueryCollection((q) =>
+        q.from({ p: projects }).select(({ p }) => ({
+          id: p.id,
+          issues: q
+            .from({ i: issues })
+            .where(({ i }) => eq(i.projectId, p.id))
+            .where(({ i }) => eq(i.severity, `high`))
+            .select(({ i }) => ({
+              id: i.id,
+              comments: q
+                .from({ c: comments })
+                .where(({ c }) => eq(c.issueId, i.id))
+                .select(({ c }) => ({
+                  id: c.id,
+                  body: c.body,
+                })),
+            })),
+        })),
+      )
+
+      await query.preload()
+      await flushPromises()
+
+      const issueInExpr = issueSubsetCalls
+        .map((options) => findExprByName(options.where, `in`))
+        .find((expr) => expr !== undefined)
+      const commentInExpr = commentSubsetCalls
+        .map((options) => findExprByName(options.where, `in`))
+        .find((expr) => expr !== undefined)
+
+      expect(issueInExpr).toBeDefined()
+      expect(getInValues(issueInExpr!)).toEqual([10, 20])
+      expect(commentInExpr).toBeDefined()
+      expect(getInValues(commentInExpr!)).toEqual([1, 3])
+    })
+  })
+
   describe(`chained live query collections without custom getKey`, () => {
     it(`should return all items when a live query collection without getKey is used as a source`, async () => {
       // Create a live query collection with the default (internal) getKey

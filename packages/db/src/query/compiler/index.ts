@@ -4,6 +4,7 @@ import {
   join as joinOperator,
   map,
   reduce,
+  tap,
 } from '@tanstack/db-ivm'
 import { optimizeQuery } from '../optimizer.js'
 import {
@@ -15,6 +16,7 @@ import {
   LimitOffsetRequireOrderByError,
   UnsupportedFromTypeError,
 } from '../../errors.js'
+import { ensureIndexForField } from '../../indexes/auto-index.js'
 import { VIRTUAL_PROP_NAMES } from '../../virtual-props.js'
 import {
   IncludesSubquery,
@@ -22,6 +24,7 @@ import {
   Value as ValClass,
   getWhereExpression,
 } from '../ir.js'
+import { inArray } from '../builder/functions.js'
 import { compileExpression, toBooleanPredicate } from './evaluators.js'
 import { processJoins } from './joins.js'
 import { containsAggregate, processGroupBy } from './group-by.js'
@@ -208,8 +211,54 @@ export function compileQuery(
   // so the child pipeline only processes rows that match parents.
   let filteredMainInput = mainInput
   if (parentKeyStream && childCorrelationField) {
-    // Re-key child input by correlation field: [correlationValue, [childKey, childRow]]
+    const resolvedMainAlias = aliasRemapping[mainSource] || mainSource
     const childFieldPath = childCorrelationField.path.slice(1) // remove alias prefix
+    const childFieldName = childFieldPath[0]
+
+    lazySources.add(mainSource)
+
+    const mainCollection = collections[mainCollectionId]
+    if (mainCollection && childFieldName) {
+      ensureIndexForField(childFieldName, childFieldPath, mainCollection)
+    }
+
+    const parentKeyStreamWithLoading = parentKeyStream.pipe(
+      tap((data) => {
+        const childSourceSubscription = subscriptions[resolvedMainAlias]
+
+        if (!childSourceSubscription) {
+          return
+        }
+
+        if (childSourceSubscription.hasLoadedInitialState()) {
+          return
+        }
+
+        const correlationKeys = [
+          ...new Set(
+            data
+              .getInner()
+              .map(([[correlationKey]]) => correlationKey)
+              .filter((correlationKey) => correlationKey != null),
+          ),
+        ]
+
+        if (correlationKeys.length === 0) {
+          return
+        }
+
+        const loaded = childSourceSubscription.requestSnapshot({
+          where: inArray(new PropRef(childFieldPath), correlationKeys),
+          optimizedOnly: true,
+        })
+
+        if (!loaded) {
+          childSourceSubscription.requestSnapshot()
+        }
+      }),
+    )
+
+    // Re-key child input by correlation field: [correlationValue, [childKey, childRow]]
     const childRekeyed = mainInput.pipe(
       map(([key, row]: [unknown, any]) => {
         const correlationValue = getNestedValue(row, childFieldPath)
@@ -218,7 +267,9 @@ export function compileQuery(
     )
 
     // Inner join: only children whose correlation key exists in parent keys pass through
-    const joined = childRekeyed.pipe(joinOperator(parentKeyStream, `inner`))
+    const joined = childRekeyed.pipe(
+      joinOperator(parentKeyStreamWithLoading, `inner`),
+    )
 
     // Extract: [correlationValue, [[childKey, childRow], parentContext]] → [childKey, childRow]
     // Tag the row with __correlationKey for output routing
@@ -410,6 +461,9 @@ export function compileQuery(
       // Merge child's alias metadata into parent's
       Object.assign(aliasToCollectionId, childResult.aliasToCollectionId)
       Object.assign(aliasRemapping, childResult.aliasRemapping)
+      for (const [alias, whereClause] of childResult.sourceWhereClauses) {
+        sourceWhereClauses.set(alias, whereClause)
+      }
 
       includesResults.push({
         pipeline: childResult.pipeline,
