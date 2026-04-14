@@ -2125,11 +2125,16 @@ class PersistedCollectionRuntime<
   }
 
   private enqueuePersistedIndexWork(task: () => Promise<void>): void {
-    const queuedTask = this.persistedIndexWork.then(task, task)
-    this.persistedIndexWork = queuedTask.then(
-      () => undefined,
-      () => undefined,
-    )
+    const runTask = async (): Promise<void> => {
+      try {
+        await task()
+      } catch {
+        // Persisted index tasks log their own failures. Swallow here so one
+        // failed task does not poison the queue.
+      }
+    }
+
+    this.persistedIndexWork = this.persistedIndexWork.then(runTask, runTask)
   }
 
   private async bootstrapPersistedIndexes(
