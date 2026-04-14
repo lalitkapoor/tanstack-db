@@ -261,6 +261,7 @@ export interface PersistenceAdapter {
     collectionId: string,
     options?: PersistedRowScanOptions,
   ) => Promise<Array<PersistedScannedRow>>
+  listIndexes?: (collectionId: string) => Promise<Array<string>>
   ensureIndex: (
     collectionId: string,
     signature: string,
@@ -897,7 +898,7 @@ class PersistedCollectionRuntime<
 
     const indexBootstrapSnapshot = this.collection?.getIndexMetadata() ?? []
     this.attachIndexLifecycleListeners()
-    await this.bootstrapPersistedIndexes(indexBootstrapSnapshot)
+    await this.reconcilePersistedIndexes(indexBootstrapSnapshot)
 
     if (this.syncMode !== `on-demand`) {
       this.activeSubsets.set(this.getSubsetKey({}), {})
@@ -2119,7 +2120,7 @@ class PersistedCollectionRuntime<
     )
   }
 
-  private async bootstrapPersistedIndexes(
+  private async reconcilePersistedIndexes(
     indexMetadataSnapshot?: Array<CollectionIndexMetadata>,
   ): Promise<void> {
     const collection = this.collection
@@ -2129,7 +2130,31 @@ class PersistedCollectionRuntime<
 
     const indexMetadata =
       indexMetadataSnapshot ?? collection?.getIndexMetadata() ?? []
+    if (!this.persistence.adapter.listIndexes) {
+      for (const metadata of indexMetadata) {
+        await this.ensurePersistedIndex(metadata)
+      }
+      return
+    }
+
+    const desiredSignatures = new Set(
+      indexMetadata.map((metadata) => metadata.signature),
+    )
+    const actualSignatures = new Set(
+      await this.persistence.adapter.listIndexes(this.collectionId),
+    )
+
+    for (const signature of actualSignatures) {
+      if (!desiredSignatures.has(signature)) {
+        await this.markPersistedIndexRemoved(signature)
+      }
+    }
+
     for (const metadata of indexMetadata) {
+      if (actualSignatures.has(metadata.signature)) {
+        continue
+      }
+
       await this.ensurePersistedIndex(metadata)
     }
   }
@@ -2179,6 +2204,10 @@ class PersistedCollectionRuntime<
   private async markIndexRemoved(
     indexMetadata: CollectionIndexMetadata,
   ): Promise<void> {
+    await this.markPersistedIndexRemoved(indexMetadata.signature)
+  }
+
+  private async markPersistedIndexRemoved(signature: string): Promise<void> {
     if (!this.persistence.adapter.markIndexRemoved) {
       return
     }
@@ -2186,7 +2215,7 @@ class PersistedCollectionRuntime<
     try {
       await this.persistence.adapter.markIndexRemoved(
         this.collectionId,
-        indexMetadata.signature,
+        signature,
       )
     } catch (error) {
       console.warn(`Failed to mark persisted index removed:`, error)
