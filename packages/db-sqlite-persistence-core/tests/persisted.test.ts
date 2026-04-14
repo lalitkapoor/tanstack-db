@@ -897,6 +897,54 @@ describe(`persistedCollectionOptions`, () => {
     ).toBe(true)
   })
 
+  it(`does not block preload on persisted index bootstrap`, async () => {
+    const adapter = createRecordingAdapter()
+    let resolveEnsureIndex: (() => void) | undefined
+
+    adapter.ensureIndex = (collectionId, signature) => {
+      adapter.ensureIndexCalls.push({ collectionId, signature })
+      return new Promise<void>((resolve) => {
+        resolveEnsureIndex = resolve
+      })
+    }
+
+    const collection = createCollection(
+      persistedCollectionOptions<Todo, string>({
+        id: `sync-present-non-blocking-indexes`,
+        getKey: (item) => item.id,
+        defaultIndexType: BasicIndex,
+        sync: {
+          sync: ({ markReady }) => {
+            markReady()
+          },
+        },
+        persistence: {
+          adapter,
+        },
+      }),
+    )
+
+    collection.createIndex((row) => row.title, {
+      name: `preload-title`,
+    })
+
+    const preloadPromise = collection.preload()
+    await flushAsyncWork()
+
+    const preloadResult = await Promise.race([
+      preloadPromise.then(() => `loaded` as const),
+      new Promise<`pending`>((resolve) => {
+        setTimeout(() => resolve(`pending`), 10)
+      }),
+    ])
+
+    expect(preloadResult).toBe(`loaded`)
+    expect(resolveEnsureIndex).toBeDefined()
+
+    resolveEnsureIndex?.()
+    await flushAsyncWork()
+  })
+
   it(`queues remote sync writes that arrive during hydration`, async () => {
     const adapter = createRecordingAdapter([
       {

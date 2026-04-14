@@ -811,6 +811,7 @@ class PersistedCollectionRuntime<
   private indexAddedUnsubscribe: (() => void) | null = null
   private indexRemovedUnsubscribe: (() => void) | null = null
   private remoteEnsureRetryTimer: ReturnType<typeof setTimeout> | null = null
+  private persistedIndexWork: Promise<void> = Promise.resolve()
   private nextSubscriptionId = 0
 
   private latestTerm = 0
@@ -897,7 +898,9 @@ class PersistedCollectionRuntime<
 
     const indexBootstrapSnapshot = this.collection?.getIndexMetadata() ?? []
     this.attachIndexLifecycleListeners()
-    await this.bootstrapPersistedIndexes(indexBootstrapSnapshot)
+    this.enqueuePersistedIndexWork(() =>
+      this.bootstrapPersistedIndexes(indexBootstrapSnapshot),
+    )
 
     if (this.syncMode !== `on-demand`) {
       this.activeSubsets.set(this.getSubsetKey({}), {})
@@ -2109,13 +2112,23 @@ class PersistedCollectionRuntime<
     }
 
     this.indexAddedUnsubscribe = this.collection.on(`index:added`, (event) => {
-      void this.ensurePersistedIndex(event.index)
+      this.enqueuePersistedIndexWork(() =>
+        this.ensurePersistedIndex(event.index),
+      )
     })
     this.indexRemovedUnsubscribe = this.collection.on(
       `index:removed`,
       (event) => {
-        void this.markIndexRemoved(event.index)
+        this.enqueuePersistedIndexWork(() => this.markIndexRemoved(event.index))
       },
+    )
+  }
+
+  private enqueuePersistedIndexWork(task: () => Promise<void>): void {
+    const queuedTask = this.persistedIndexWork.then(task, task)
+    this.persistedIndexWork = queuedTask.then(
+      () => undefined,
+      () => undefined,
     )
   }
 
