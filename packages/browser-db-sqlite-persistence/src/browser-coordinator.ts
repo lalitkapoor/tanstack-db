@@ -28,7 +28,6 @@ type RPCRequest =
   | {
       type: `rpc:ensureRemoteSubset:req`
       rpcId: string
-      options: LoadSubsetOptions
     }
   | {
       type: `rpc:ensurePersistedIndex:req`
@@ -194,7 +193,7 @@ export class BrowserCollectionCoordinator implements PersistedCollectionCoordina
 
   async requestEnsureRemoteSubset(
     collectionId: string,
-    options: LoadSubsetOptions,
+    _options: LoadSubsetOptions,
   ): Promise<void> {
     if (this.isLeader(collectionId)) return
 
@@ -206,7 +205,6 @@ export class BrowserCollectionCoordinator implements PersistedCollectionCoordina
     }>(collectionId, {
       type: `rpc:ensureRemoteSubset:req`,
       rpcId: crypto.randomUUID(),
-      options,
     })
 
     if (!response.ok) {

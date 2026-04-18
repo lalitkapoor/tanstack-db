@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrowserCollectionCoordinator } from '../src/browser-coordinator'
+import { EventEmitter } from '../../db/src/event-emitter'
 import type { BrowserCollectionCoordinatorOptions } from '../src/browser-coordinator'
 import type { PersistenceAdapter } from '@tanstack/db-sqlite-persistence-core'
+import type { Subscription, SubscriptionEvents } from '@tanstack/db'
 
 // ---------------------------------------------------------------------------
 // BroadcastChannel mock
@@ -28,12 +30,13 @@ class MockBroadcastChannel {
   postMessage(data: unknown): void {
     const peers = channels.get(this.name)
     if (!peers) return
+    const clonedData = structuredClone(data)
     // Deliver to all other instances on same channel (simulating cross-tab)
     for (const peer of peers) {
       if (peer !== this && peer.onmessage) {
         // Use microtask to simulate async delivery
         const handler = peer.onmessage
-        queueMicrotask(() => handler({ data: structuredClone(data) }))
+        queueMicrotask(() => handler({ data: clonedData }))
       }
     }
   }
@@ -41,6 +44,14 @@ class MockBroadcastChannel {
   close(): void {
     channels.get(this.name)?.delete(this)
   }
+}
+
+class FakeSubscription
+  extends EventEmitter<SubscriptionEvents>
+  implements Subscription
+{
+  readonly status = `loadingSubset` as const
+  readonly onResult = (result: { isSuccess: boolean }) => result.isSuccess
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +520,27 @@ describe(`BrowserCollectionCoordinator`, () => {
   })
 
   describe(`RPC - ensurePersistedIndex`, () => {
+    it(`follower can ensure remote subset with a non-cloneable subscription payload`, async () => {
+      const leader = createCoordinator()
+      const follower = createCoordinator()
+
+      leader.subscribe(`todos`, () => {})
+      follower.subscribe(`todos`, () => {})
+      await flush(50)
+
+      const subscription = new FakeSubscription()
+
+      await expect(
+        follower.requestEnsureRemoteSubset(`todos`, {
+          limit: 10,
+          subscription,
+        }),
+      ).resolves.toBeUndefined()
+
+      leader.dispose()
+      follower.dispose()
+    })
+
     it(`leader ensures index locally`, async () => {
       const adapter = createStubAdapter()
       adapter.ensureIndex = vi.fn().mockResolvedValue(undefined)
