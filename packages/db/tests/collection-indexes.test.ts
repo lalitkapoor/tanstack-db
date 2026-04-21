@@ -321,6 +321,25 @@ describe(`Collection Indexes`, () => {
     })
 
     it(`should return a defensive metadata snapshot copy`, () => {
+      collection.createIndex((row) => row.status, {
+        name: `statusIndex`,
+      })
+
+      const snapshotA = collection.getIndexMetadata()
+      expect(snapshotA).toHaveLength(1)
+
+      const originalSignature = snapshotA[0]!.signature
+      snapshotA[0]!.signature = `tampered`
+      snapshotA[0]!.resolver.kind = `async`
+
+      const snapshotB = collection.getIndexMetadata()
+      expect(snapshotB[0]!.signature).toBe(originalSignature)
+      expect(snapshotB[0]!.resolver.kind).toBe(`constructor`)
+      expect(snapshotB[0]!.expressions).toHaveLength(1)
+      expect(snapshotB[0]!.expressions[0]!.path[0]).toBe(`status`)
+    })
+
+    it(`should return a defensive metadata snapshot copy for composite indexes`, () => {
       collection.createIndex((row) => [row.status, row.age], {
         name: `statusIndex`,
       })
@@ -336,6 +355,7 @@ describe(`Collection Indexes`, () => {
       const snapshotB = collection.getIndexMetadata()
       expect(snapshotB[0]!.signature).toBe(originalSignature)
       expect(snapshotB[0]!.resolver.kind).toBe(`constructor`)
+      expect(snapshotB[0]!.expressions).toHaveLength(2)
       expect(snapshotB[0]!.expressions[0]!.path[0]).toBe(`status`)
     })
 
