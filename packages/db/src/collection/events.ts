@@ -71,7 +71,7 @@ export interface CollectionIndexMetadata {
   /**
    * Version for the signature serialization contract.
    */
-  signatureVersion: 1
+  signatureVersion: 1 | 2
   /**
    * Stable signature derived from expression + serializable options.
    * Non-serializable option fields are intentionally omitted.
@@ -80,6 +80,7 @@ export interface CollectionIndexMetadata {
   indexId: number
   name?: string
   expression: BasicExpression
+  expressions: Array<BasicExpression>
   resolver: CollectionIndexResolverMetadata
   options?: CollectionIndexSerializableValue
 }
