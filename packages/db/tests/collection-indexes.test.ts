@@ -291,6 +291,41 @@ describe(`Collection Indexes`, () => {
         name: `statusIndex`,
         signatureVersion: 1,
       })
+      expect(snapshot[0]?.expressions).toHaveLength(1)
+    })
+
+    it(`should expose declared composite index metadata for persisted bootstrap`, () => {
+      const lazyCollection = createCollection<TestItem, string>({
+        getKey: (item) => item.id,
+        sync: {
+          sync: ({ markReady }) => {
+            markReady()
+          },
+        },
+      })
+
+      const declaredIndexId = lazyCollection.declareIndex((row) => [
+        row.status,
+        row.age,
+      ], {
+        name: `statusAgeIndex`,
+      })
+
+      const snapshot = lazyCollection.getIndexMetadata()
+
+      expect(snapshot).toHaveLength(1)
+      expect(snapshot[0]).toMatchObject({
+        indexId: declaredIndexId,
+        name: `statusAgeIndex`,
+        signatureVersion: 2,
+        resolver: {
+          kind: `declaration`,
+        },
+      })
+      expect(snapshot[0]?.expressions).toHaveLength(2)
+      expect(snapshot[0]?.expression.type).toBe(`ref`)
+      expect(snapshot[0]?.expressions[0]?.type).toBe(`ref`)
+      expect(snapshot[0]?.expressions[1]?.type).toBe(`ref`)
     })
 
     it(`should return a defensive metadata snapshot copy`, () => {

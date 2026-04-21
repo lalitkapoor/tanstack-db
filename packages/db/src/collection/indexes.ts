@@ -19,6 +19,11 @@ import type {
 } from './events'
 
 const INDEX_SIGNATURE_VERSION = 1 as const
+const COMPOSITE_INDEX_SIGNATURE_VERSION = 2 as const
+
+export interface IndexDeclarationOptions {
+  name?: string
+}
 
 function compareStringsCodePoint(left: string, right: string): number {
   if (left === right) {
@@ -153,33 +158,53 @@ function stableStringifyCollectionIndexValue(
   return `{${serializedEntries.join(`,`)}}`
 }
 
-function createCollectionIndexMetadata<TKey extends string | number>(
+function createCollectionIndexMetadata(
   indexId: number,
-  expression: BasicExpression,
+  expressions: Array<BasicExpression>,
   name: string | undefined,
-  resolver: IndexConstructor<TKey>,
+  resolver: CollectionIndexResolverMetadata,
   options: unknown,
 ): CollectionIndexMetadata {
-  const resolverMetadata = resolveResolverMetadata(resolver)
-  const serializedExpression = toSerializableIndexValue(expression) ?? null
+  const [expression] = expressions
+  if (!expression) {
+    throw new CollectionConfigurationError(
+      `Index declarations must include at least one expression`,
+    )
+  }
+
+  const signatureVersion =
+    expressions.length === 1
+      ? INDEX_SIGNATURE_VERSION
+      : COMPOSITE_INDEX_SIGNATURE_VERSION
+  const serializedExpressions = expressions.map(
+    (candidate) => toSerializableIndexValue(candidate) ?? null,
+  )
   const serializedOptions = toSerializableIndexValue(options)
-  const signatureInput = toSerializableIndexValue({
-    signatureVersion: INDEX_SIGNATURE_VERSION,
-    expression: serializedExpression,
-    options: serializedOptions ?? null,
-  })
+  const signatureInput =
+    signatureVersion === INDEX_SIGNATURE_VERSION
+      ? toSerializableIndexValue({
+          signatureVersion,
+          expression: serializedExpressions[0] ?? null,
+          options: serializedOptions ?? null,
+        })
+      : toSerializableIndexValue({
+          signatureVersion,
+          expressions: serializedExpressions,
+          options: serializedOptions ?? null,
+        })
   const normalizedSignatureInput = signatureInput ?? null
   const signature = stableStringifyCollectionIndexValue(
     normalizedSignatureInput,
   )
 
   return {
-    signatureVersion: INDEX_SIGNATURE_VERSION,
+    signatureVersion,
     signature,
     indexId,
     name,
     expression,
-    resolver: resolverMetadata,
+    expressions,
+    resolver,
     ...(serializedOptions === undefined ? {} : { options: serializedOptions }),
   }
 }
@@ -204,6 +229,28 @@ function cloneSerializableIndexValue(
 
 function cloneExpression(expression: BasicExpression): BasicExpression {
   return JSON.parse(JSON.stringify(expression)) as BasicExpression
+}
+
+function cloneExpressions(
+  expressions: Array<BasicExpression>,
+): Array<BasicExpression> {
+  return expressions.map((expression) => cloneExpression(expression))
+}
+
+function createIndexExpressions(
+  indexExpression: unknown,
+): Array<BasicExpression> {
+  const rawExpressions = Array.isArray(indexExpression)
+    ? indexExpression
+    : [indexExpression]
+
+  if (rawExpressions.length === 0) {
+    throw new CollectionConfigurationError(
+      `Index declarations must include at least one expression`,
+    )
+  }
+
+  return rawExpressions.map((expression) => toExpression(expression))
 }
 
 export class CollectionIndexesManager<
@@ -257,7 +304,13 @@ export class CollectionIndexesManager<
     const indexId = ++this.indexCounter
     const singleRowRefProxy = createSingleRowRefProxy<TOutput>()
     const indexExpression = indexCallback(singleRowRefProxy)
-    const expression = toExpression(indexExpression)
+    const expressions = createIndexExpressions(indexExpression)
+    const [expression] = expressions
+    if (!expression) {
+      throw new CollectionConfigurationError(
+        `createIndex requires at least one index expression`,
+      )
+    }
 
     // Use provided index type, or fall back to collection's default
     const IndexType = config.indexType ?? this.defaultIndexType
@@ -286,15 +339,44 @@ export class CollectionIndexesManager<
     // Track metadata and emit event
     const metadata = createCollectionIndexMetadata(
       indexId,
-      expression,
+      expressions,
       config.name,
-      IndexType,
+      resolveResolverMetadata(IndexType),
       config.options,
     )
     this.indexMetadata.set(indexId, metadata)
     this.events.emitIndexAdded(metadata)
 
     return index
+  }
+
+  /**
+   * Declares index metadata without creating an in-memory runtime index.
+   * Useful for persistence layers that can materialize backend indexes,
+   * including composite indexes.
+   */
+  public declareIndex(
+    indexCallback: (row: SingleRowRefProxy<TOutput>) => any,
+    config: IndexDeclarationOptions = {},
+  ): number {
+    this.lifecycle.validateCollectionUsable(`declareIndex`)
+
+    const indexId = ++this.indexCounter
+    const singleRowRefProxy = createSingleRowRefProxy<TOutput>()
+    const indexExpression = indexCallback(singleRowRefProxy)
+    const expressions = createIndexExpressions(indexExpression)
+    const metadata = createCollectionIndexMetadata(
+      indexId,
+      expressions,
+      config.name,
+      { kind: `declaration` },
+      undefined,
+    )
+
+    this.indexMetadata.set(indexId, metadata)
+    this.events.emitIndexAdded(metadata)
+
+    return indexId
   }
 
   /**
@@ -306,18 +388,20 @@ export class CollectionIndexesManager<
 
     const indexId = typeof indexOrId === `number` ? indexOrId : indexOrId.id
     const index = this.indexes.get(indexId)
-    if (!index) {
+    const metadata = this.indexMetadata.get(indexId)
+
+    if (!index && !metadata) {
       return false
     }
 
-    if (typeof indexOrId !== `number` && index !== indexOrId) {
+    if (index && typeof indexOrId !== `number` && index !== indexOrId) {
       // Passed a different index instance with the same id — do not remove.
       return false
     }
 
-    this.indexes.delete(indexId)
-
-    const metadata = this.indexMetadata.get(indexId)
+    if (index) {
+      this.indexes.delete(indexId)
+    }
     this.indexMetadata.delete(indexId)
     if (metadata) {
       this.events.emitIndexRemoved(metadata)
@@ -337,6 +421,7 @@ export class CollectionIndexesManager<
       .map((metadata) => ({
         ...metadata,
         expression: cloneExpression(metadata.expression),
+        expressions: cloneExpressions(metadata.expressions),
         resolver: { ...metadata.resolver },
         ...(metadata.options === undefined
           ? {}

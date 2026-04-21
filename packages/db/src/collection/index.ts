@@ -12,6 +12,7 @@ import { CollectionSyncManager } from './sync'
 import { CollectionIndexesManager } from './indexes'
 import { CollectionMutationsManager } from './mutations'
 import { CollectionEventsManager } from './events.js'
+import type { IndexDeclarationOptions } from './indexes'
 import type { CollectionSubscription } from './subscription'
 import type {
   AllCollectionEvents,
@@ -43,6 +44,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec'
 import type { WithVirtualProps } from '../virtual-props.js'
 
 export type { CollectionIndexMetadata } from './events.js'
+export type { IndexDeclarationOptions } from './indexes'
 
 /**
  * Enhanced Collection interface that includes both data type T and utilities TUtils
@@ -599,6 +601,18 @@ export class CollectionImpl<
     config: IndexOptions<TIndexType> = {},
   ): BaseIndex<TKey> {
     return this._indexes.createIndex(indexCallback, config)
+  }
+
+  /**
+   * Declares index metadata without creating an in-memory runtime index.
+   * Persistence layers can use this to materialize backend or persisted indexes,
+   * including composite indexes.
+   */
+  public declareIndex(
+    indexCallback: (row: SingleRowRefProxy<TOutput>) => any,
+    config: IndexDeclarationOptions = {},
+  ): number {
+    return this._indexes.declareIndex(indexCallback, config)
   }
 
   /**

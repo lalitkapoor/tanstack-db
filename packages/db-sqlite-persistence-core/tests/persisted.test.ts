@@ -19,6 +19,7 @@ import {
 import type {
   PersistedCollectionCoordinator,
   PersistedCollectionPersistence,
+  PersistedIndexSpec,
   PersistedSyncWrappedOptions,
   PersistenceAdapter,
   ProtocolEnvelope,
@@ -46,7 +47,11 @@ type RecordingAdapter = PersistenceAdapter & {
       }>
     }
   }>
-  ensureIndexCalls: Array<{ collectionId: string; signature: string }>
+  ensureIndexCalls: Array<{
+    collectionId: string
+    signature: string
+    spec: PersistedIndexSpec
+  }>
   markIndexRemovedCalls: Array<{ collectionId: string; signature: string }>
   loadSubsetCalls: Array<{
     collectionId: string
@@ -160,8 +165,8 @@ function createRecordingAdapter(
       }
       return Promise.resolve()
     },
-    ensureIndex: (collectionId, signature) => {
-      adapter.ensureIndexCalls.push({ collectionId, signature })
+    ensureIndex: (collectionId, signature, spec) => {
+      adapter.ensureIndexCalls.push({ collectionId, signature, spec })
       return Promise.resolve()
     },
     markIndexRemoved: (collectionId, signature) => {
@@ -893,6 +898,56 @@ describe(`persistedCollectionOptions`, () => {
     expect(
       adapter.markIndexRemovedCalls.some(
         (call) => call.signature === expectedPreSyncSignature,
+      ),
+    ).toBe(true)
+  })
+
+  it(`bootstraps declared composite persisted indexes`, async () => {
+    const adapter = createRecordingAdapter()
+    const collection = createCollection(
+      persistedCollectionOptions<Todo, string>({
+        id: `sync-present-declared-composite-indexes`,
+        getKey: (item) => item.id,
+        sync: {
+          sync: ({ markReady }) => {
+            markReady()
+          },
+        },
+        persistence: {
+          adapter,
+        },
+      }),
+    )
+
+    const declaredIndexId = collection.declareIndex(
+      (row) => [row.title, row.id],
+      {
+        name: `title-id`,
+      },
+    )
+    const declaredIndex = collection
+      .getIndexMetadata()
+      .find((index) => index.indexId === declaredIndexId)
+
+    expect(declaredIndex).toMatchObject({
+      indexId: declaredIndexId,
+      name: `title-id`,
+      signatureVersion: 2,
+      resolver: {
+        kind: `declaration`,
+      },
+    })
+    expect(declaredIndex?.expressions).toHaveLength(2)
+
+    await collection.preload()
+    await flushAsyncWork()
+
+    expect(
+      adapter.ensureIndexCalls.some(
+        (call) =>
+          call.signature === declaredIndex?.signature &&
+          call.spec.metadata?.name === `title-id` &&
+          call.spec.expressionSql.length === 2,
       ),
     ).toBe(true)
   })
