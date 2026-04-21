@@ -2138,7 +2138,9 @@ class PersistedCollectionRuntime<
     index: CollectionIndexMetadata,
   ): PersistedIndexSpec {
     return {
-      expressionSql: [stableSerialize(index.expression)],
+      expressionSql: index.expressions.map((expression) =>
+        stableSerialize(expression),
+      ),
       metadata: {
         name: index.name ?? null,
         resolver: toStableSerializable(index.resolver),

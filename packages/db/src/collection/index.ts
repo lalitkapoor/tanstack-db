@@ -592,6 +592,14 @@ export class CollectionImpl<
    *
    * // Create an index with collection's default type
    * const nameIndex = collection.createIndex((row) => row.name)
+   *
+   * // Create a composite persisted index declaration
+   * // Runtime query optimization continues to use the first expression.
+   * const compositeIndex = collection.createIndex((row) => [
+   *   row.userId,
+   *   row.createdAt,
+   *   row.id,
+   * ])
    * ```
    */
   public createIndex<TIndexType extends IndexConstructor<TKey>>(

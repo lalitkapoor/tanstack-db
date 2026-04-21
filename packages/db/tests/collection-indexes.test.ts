@@ -199,6 +199,32 @@ describe(`Collection Indexes`, () => {
       const firstValue = scoreIndex.orderedEntriesArray[0]?.[0]
       expect(firstValue).toBeUndefined()
     })
+
+    it(`should allow composite createIndex declarations while runtime indexing uses the first expression`, () => {
+      const compositeIndex = collection.createIndex(
+        (row) => [row.status, row.age],
+        {
+          name: `statusAgeIndex`,
+        },
+      )
+
+      expect(compositeIndex.name).toBe(`statusAgeIndex`)
+      expect(compositeIndex.expression.type).toBe(`ref`)
+      expect(compositeIndex.equalityLookup(`active`).size).toBe(3)
+
+      const metadata = collection
+        .getIndexMetadata()
+        .find((index) => index.indexId === compositeIndex.id)
+
+      expect(metadata).toMatchObject({
+        indexId: compositeIndex.id,
+        name: `statusAgeIndex`,
+        signatureVersion: 2,
+      })
+      expect(metadata?.expressions).toHaveLength(2)
+      expect(metadata?.expressions[0]?.type).toBe(`ref`)
+      expect(metadata?.expressions[1]?.type).toBe(`ref`)
+    })
   })
 
   describe(`Index Removal`, () => {
@@ -291,6 +317,7 @@ describe(`Collection Indexes`, () => {
         name: `statusIndex`,
         signatureVersion: 1,
       })
+      expect(snapshot[0]?.expressions).toHaveLength(1)
     })
 
     it(`should return a defensive metadata snapshot copy`, () => {
@@ -308,6 +335,28 @@ describe(`Collection Indexes`, () => {
       const snapshotB = collection.getIndexMetadata()
       expect(snapshotB[0]!.signature).toBe(originalSignature)
       expect(snapshotB[0]!.resolver.kind).toBe(`constructor`)
+      expect(snapshotB[0]!.expressions).toHaveLength(1)
+      expect(snapshotB[0]!.expressions[0]!.path[0]).toBe(`status`)
+    })
+
+    it(`should return a defensive metadata snapshot copy for composite indexes`, () => {
+      collection.createIndex((row) => [row.status, row.age], {
+        name: `statusIndex`,
+      })
+
+      const snapshotA = collection.getIndexMetadata()
+      expect(snapshotA).toHaveLength(1)
+
+      const originalSignature = snapshotA[0]!.signature
+      snapshotA[0]!.signature = `tampered`
+      snapshotA[0]!.resolver.kind = `async`
+      snapshotA[0]!.expressions[0]!.path[0] = `tampered`
+
+      const snapshotB = collection.getIndexMetadata()
+      expect(snapshotB[0]!.signature).toBe(originalSignature)
+      expect(snapshotB[0]!.resolver.kind).toBe(`constructor`)
+      expect(snapshotB[0]!.expressions).toHaveLength(2)
+      expect(snapshotB[0]!.expressions[0]!.path[0]).toBe(`status`)
     })
 
     it(`should remove index from collection`, () => {

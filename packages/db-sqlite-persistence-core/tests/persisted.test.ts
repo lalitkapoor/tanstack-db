@@ -19,6 +19,7 @@ import {
 import type {
   PersistedCollectionCoordinator,
   PersistedCollectionPersistence,
+  PersistedIndexSpec,
   PersistedSyncWrappedOptions,
   PersistenceAdapter,
   ProtocolEnvelope,
@@ -46,7 +47,11 @@ type RecordingAdapter = PersistenceAdapter & {
       }>
     }
   }>
-  ensureIndexCalls: Array<{ collectionId: string; signature: string }>
+  ensureIndexCalls: Array<{
+    collectionId: string
+    signature: string
+    spec: PersistedIndexSpec
+  }>
   markIndexRemovedCalls: Array<{ collectionId: string; signature: string }>
   loadSubsetCalls: Array<{
     collectionId: string
@@ -160,8 +165,8 @@ function createRecordingAdapter(
       }
       return Promise.resolve()
     },
-    ensureIndex: (collectionId, signature) => {
-      adapter.ensureIndexCalls.push({ collectionId, signature })
+    ensureIndex: (collectionId, signature, spec) => {
+      adapter.ensureIndexCalls.push({ collectionId, signature, spec })
       return Promise.resolve()
     },
     markIndexRemoved: (collectionId, signature) => {
@@ -893,6 +898,58 @@ describe(`persistedCollectionOptions`, () => {
     expect(
       adapter.markIndexRemovedCalls.some(
         (call) => call.signature === expectedPreSyncSignature,
+      ),
+    ).toBe(true)
+  })
+
+  it(`materializes composite persisted indexes declared via createIndex`, async () => {
+    const adapter = createRecordingAdapter()
+    const collection = createCollection(
+      persistedCollectionOptions<Todo, string>({
+        id: `sync-present-composite-create-index`,
+        getKey: (item) => item.id,
+        defaultIndexType: BasicIndex,
+        sync: {
+          sync: ({ markReady }) => {
+            markReady()
+          },
+        },
+        persistence: {
+          adapter,
+        },
+      }),
+    )
+
+    const compositeIndex = collection.createIndex(
+      (row) => [row.title, row.id],
+      {
+        name: `title-id`,
+      },
+    )
+    const compositeMetadata = collection
+      .getIndexMetadata()
+      .find((index) => index.indexId === compositeIndex.id)
+
+    expect(compositeMetadata).toMatchObject({
+      indexId: compositeIndex.id,
+      name: `title-id`,
+      signatureVersion: 2,
+      resolver: {
+        kind: `constructor`,
+        name: `BasicIndex`,
+      },
+    })
+    expect(compositeMetadata?.expressions).toHaveLength(2)
+
+    await collection.preload()
+    await flushAsyncWork()
+
+    expect(
+      adapter.ensureIndexCalls.some(
+        (call) =>
+          call.signature === compositeMetadata?.signature &&
+          call.spec.metadata?.name === `title-id` &&
+          call.spec.expressionSql.length === 2,
       ),
     ).toBe(true)
   })

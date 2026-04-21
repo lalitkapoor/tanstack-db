@@ -19,6 +19,7 @@ import type {
 } from './events'
 
 const INDEX_SIGNATURE_VERSION = 1 as const
+const COMPOSITE_INDEX_SIGNATURE_VERSION = 2 as const
 
 function compareStringsCodePoint(left: string, right: string): number {
   if (left === right) {
@@ -155,30 +156,51 @@ function stableStringifyCollectionIndexValue(
 
 function createCollectionIndexMetadata<TKey extends string | number>(
   indexId: number,
-  expression: BasicExpression,
+  expressions: Array<BasicExpression>,
   name: string | undefined,
   resolver: IndexConstructor<TKey>,
   options: unknown,
 ): CollectionIndexMetadata {
+  const [expression] = expressions
+  if (!expression) {
+    throw new CollectionConfigurationError(
+      `createIndex requires at least one index expression`,
+    )
+  }
+
   const resolverMetadata = resolveResolverMetadata(resolver)
-  const serializedExpression = toSerializableIndexValue(expression) ?? null
+  const signatureVersion =
+    expressions.length === 1
+      ? INDEX_SIGNATURE_VERSION
+      : COMPOSITE_INDEX_SIGNATURE_VERSION
+  const serializedExpressions = expressions.map(
+    (candidate) => toSerializableIndexValue(candidate) ?? null,
+  )
   const serializedOptions = toSerializableIndexValue(options)
-  const signatureInput = toSerializableIndexValue({
-    signatureVersion: INDEX_SIGNATURE_VERSION,
-    expression: serializedExpression,
-    options: serializedOptions ?? null,
-  })
+  const signatureInput =
+    signatureVersion === INDEX_SIGNATURE_VERSION
+      ? toSerializableIndexValue({
+          signatureVersion,
+          expression: serializedExpressions[0] ?? null,
+          options: serializedOptions ?? null,
+        })
+      : toSerializableIndexValue({
+          signatureVersion,
+          expressions: serializedExpressions,
+          options: serializedOptions ?? null,
+        })
   const normalizedSignatureInput = signatureInput ?? null
   const signature = stableStringifyCollectionIndexValue(
     normalizedSignatureInput,
   )
 
   return {
-    signatureVersion: INDEX_SIGNATURE_VERSION,
+    signatureVersion,
     signature,
     indexId,
     name,
     expression,
+    expressions,
     resolver: resolverMetadata,
     ...(serializedOptions === undefined ? {} : { options: serializedOptions }),
   }
@@ -204,6 +226,28 @@ function cloneSerializableIndexValue(
 
 function cloneExpression(expression: BasicExpression): BasicExpression {
   return JSON.parse(JSON.stringify(expression)) as BasicExpression
+}
+
+function cloneExpressions(
+  expressions: Array<BasicExpression>,
+): Array<BasicExpression> {
+  return expressions.map((expression) => cloneExpression(expression))
+}
+
+function createIndexExpressions(
+  indexExpression: unknown,
+): Array<BasicExpression> {
+  const rawExpressions = Array.isArray(indexExpression)
+    ? indexExpression
+    : [indexExpression]
+
+  if (rawExpressions.length === 0) {
+    throw new CollectionConfigurationError(
+      `createIndex requires at least one index expression`,
+    )
+  }
+
+  return rawExpressions.map((expression) => toExpression(expression))
 }
 
 export class CollectionIndexesManager<
@@ -257,7 +301,13 @@ export class CollectionIndexesManager<
     const indexId = ++this.indexCounter
     const singleRowRefProxy = createSingleRowRefProxy<TOutput>()
     const indexExpression = indexCallback(singleRowRefProxy)
-    const expression = toExpression(indexExpression)
+    const expressions = createIndexExpressions(indexExpression)
+    const [expression] = expressions
+    if (!expression) {
+      throw new CollectionConfigurationError(
+        `createIndex requires at least one index expression`,
+      )
+    }
 
     // Use provided index type, or fall back to collection's default
     const IndexType = config.indexType ?? this.defaultIndexType
@@ -286,7 +336,7 @@ export class CollectionIndexesManager<
     // Track metadata and emit event
     const metadata = createCollectionIndexMetadata(
       indexId,
-      expression,
+      expressions,
       config.name,
       IndexType,
       config.options,
@@ -337,6 +387,7 @@ export class CollectionIndexesManager<
       .map((metadata) => ({
         ...metadata,
         expression: cloneExpression(metadata.expression),
+        expressions: cloneExpressions(metadata.expressions),
         resolver: { ...metadata.resolver },
         ...(metadata.options === undefined
           ? {}
