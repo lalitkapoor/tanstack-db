@@ -32,20 +32,6 @@ export type SyncState = {
 export type FullSyncState = Required<Omit<SyncState, `flushPendingChanges`>> &
   Pick<SyncState, `flushPendingChanges`>
 
-export type TrackedSourceRecord = {
-  collectionId: string
-  key: string | number
-}
-
-export type TrackedSourceRecordsChange = {
-  added: Array<TrackedSourceRecord>
-  removed: Array<TrackedSourceRecord>
-}
-
-export type SubscribeTrackedSourceRecordsOptions = {
-  includeInitialState?: boolean
-}
-
 /**
  * Configuration interface for live query collection options
  *
