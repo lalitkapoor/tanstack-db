@@ -152,7 +152,7 @@ importers:
         version: link:../../../packages/angular-db
       '@tanstack/db':
         specifier: ^0.6.5
-        version: link:../../../packages/db
+        version: 0.6.5(typescript@5.9.3)
       rxjs:
         specifier: ^7.8.2
         version: 7.8.2
@@ -301,7 +301,7 @@ importers:
         version: 11.4.1(react-native@0.79.6(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.0.0))
       '@tanstack/db':
         specifier: ^0.6.5
-        version: link:../../../packages/db
+        version: 0.6.5(typescript@5.9.3)
       '@tanstack/offline-transactions':
         specifier: ^1.0.30
         version: link:../../../packages/offline-transactions
@@ -398,7 +398,7 @@ importers:
         version: 11.4.1(react-native@0.79.6(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.0.0))
       '@tanstack/db':
         specifier: ^0.6.5
-        version: link:../../../packages/db
+        version: 0.6.5(typescript@5.9.3)
       '@tanstack/electric-db-collection':
         specifier: ^0.3.3
         version: link:../../../packages/electric-db-collection
@@ -486,7 +486,7 @@ importers:
         version: link:../../../packages/browser-db-sqlite-persistence
       '@tanstack/db':
         specifier: ^0.6.5
-        version: link:../../../packages/db
+        version: 0.6.5(typescript@5.9.3)
       '@tanstack/offline-transactions':
         specifier: ^1.0.30
         version: link:../../../packages/offline-transactions
@@ -553,7 +553,7 @@ importers:
     dependencies:
       '@tanstack/db':
         specifier: ^0.6.5
-        version: link:../../../packages/db
+        version: 0.6.5(typescript@5.9.3)
       '@tanstack/react-db':
         specifier: ^0.1.83
         version: link:../../../packages/react-db
@@ -874,7 +874,7 @@ importers:
         version: 0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1)
       drizzle-zod:
         specifier: ^0.8.3
-        version: 0.8.3(drizzle-orm@0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1))(zod@3.25.76)
+        version: 0.8.3(drizzle-orm@0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1))(zod@4.3.6)
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -5648,6 +5648,16 @@ packages:
     resolution: {integrity: sha512-zP1b6xd864AOOJQ7u6r+kicohRc8dAyql6sBbQh2f2RjoEynAfn0GrMHGeqhl1LN8JThokCkcjfGnXbPEz3q3A==}
     engines: {node: '>=18'}
     deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+
+  '@tanstack/db-ivm@0.1.18':
+    resolution: {integrity: sha512-+pZJiRKdoKRM5Epq9T7otD9ZJl82pRFauo7LKuJGrarjVKQ7r+QQlPe3kGdN9LEKSnuNGIWjX9OOY4M8kH4eLw==}
+    peerDependencies:
+      typescript: '>=4.7'
+
+  '@tanstack/db@0.6.5':
+    resolution: {integrity: sha512-gtCuAo4UtC9SR/kTMu5fVEff6qZ2R1FZi9X7MybtHKA6wve7RePifGG6qBI4OmMB+7juT5/+glNbnqZOrG0/pg==}
+    peerDependencies:
+      typescript: '>=4.7'
 
   '@tanstack/eslint-config@0.3.3':
     resolution: {integrity: sha512-8VFyAaIFV9onJcfc5yVj5WWl6DmN3W4m+t0Mb+nZrQmqHy+kDndw5O5Xv2BHVWRRPTqnhlJYh6wHWGh0R81ZzQ==}
@@ -17529,6 +17539,19 @@ snapshots:
       - typescript
       - vite
 
+  '@tanstack/db-ivm@0.1.18(typescript@5.9.3)':
+    dependencies:
+      fractional-indexing: 3.2.0
+      sorted-btree: 1.8.1
+      typescript: 5.9.3
+
+  '@tanstack/db@0.6.5(typescript@5.9.3)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@tanstack/db-ivm': 0.1.18(typescript@5.9.3)
+      '@tanstack/pacer-lite': 0.2.1
+      typescript: 5.9.3
+
   '@tanstack/eslint-config@0.3.3(@typescript-eslint/utils@8.55.0(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)':
     dependencies:
       '@eslint/js': 9.39.4
@@ -19933,11 +19956,6 @@ snapshots:
       pg: 8.20.0
       postgres: 3.4.8
       sql.js: 1.14.1
-
-  drizzle-zod@0.8.3(drizzle-orm@0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1))(zod@3.25.76):
-    dependencies:
-      drizzle-orm: 0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1)
-      zod: 3.25.76
 
   drizzle-zod@0.8.3(drizzle-orm@0.45.1(@op-engineering/op-sqlite@15.2.7(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.16.0)(better-sqlite3@12.8.0)(expo-sqlite@55.0.11(expo@55.0.8)(react-native@0.83.2(@babel/core@7.29.0)(@types/react@19.2.13)(react@19.2.4))(react@19.2.4))(gel@2.1.1)(kysely@0.28.11)(pg@8.20.0)(postgres@3.4.8)(sql.js@1.14.1))(zod@4.3.6):
     dependencies:

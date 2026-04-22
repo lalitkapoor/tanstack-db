@@ -18,7 +18,7 @@
     "@op-engineering/op-sqlite": "^15.2.5",
     "@react-native-async-storage/async-storage": "2.1.2",
     "@react-native-community/netinfo": "11.4.1",
-    "@tanstack/db": "^0.6.5",
+    "@tanstack/db": "^0.7.0",
     "@tanstack/electric-db-collection": "^0.3.3",
     "@tanstack/offline-transactions": "^1.0.30",
     "@tanstack/react-db": "^0.1.83",

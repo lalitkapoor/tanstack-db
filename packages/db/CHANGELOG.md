@@ -1,5 +1,13 @@
 # @tanstack/db
 
+## 0.7.0
+
+### Minor Changes
+
+- Add live query utilities for observing tracked source records.
+
+  Live query collections now expose `utils.getTrackedSourceRecords()` and `utils.subscribeTrackedSourceRecords()` so consumers can observe which source collection records are currently contributing to an active live query. The API returns stable `{ collectionId, key }` identities, emits add/remove deltas as tracked source-record membership changes, and clears tracked identities when the last live query subscriber unsubscribes.
+
 ## 0.6.5
 
 ### Patch Changes
