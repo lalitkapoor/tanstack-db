@@ -131,6 +131,10 @@ export class CollectionSubscriber<
       this.ensureLoadingPromise(subscription)
     }
 
+    subscription.on(`unsubscribed`, () => {
+      this.clearTrackedSourceKeys()
+    })
+
     const unsubscribe = () => {
       // If subscription has a pending promise, resolve it before unsubscribing
       const deferred = this.subscriptionLoadingPromises.get(subscription)
@@ -167,6 +171,10 @@ export class CollectionSubscriber<
       input,
       filteredChanges,
       this.collection.config.getKey,
+    )
+    this.collectionConfigBuilder.applyTrackedSourceRecordChanges(
+      this.collectionId,
+      filteredChanges,
     )
 
     // Do not provide the callback that loads more data
@@ -282,7 +290,7 @@ export class CollectionSubscriber<
       this.biggest = undefined
       this.lastLoadRequestKey = undefined
       this.pendingOrderedLoadPromise = undefined
-      this.sentToD2Keys.clear()
+      this.clearTrackedSourceKeys()
     })
 
     // Clean up truncate listener when subscription is unsubscribed
@@ -466,5 +474,17 @@ export class CollectionSubscriber<
     this.collectionConfigBuilder.liveQueryCollection!._sync.trackLoadPromise(
       promise,
     )
+  }
+
+  private clearTrackedSourceKeys() {
+    if (this.sentToD2Keys.size === 0) {
+      return
+    }
+
+    this.collectionConfigBuilder.clearTrackedSourceRecordsForCollection(
+      this.collectionId,
+      this.sentToD2Keys,
+    )
+    this.sentToD2Keys.clear()
   }
 }

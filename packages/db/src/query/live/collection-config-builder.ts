@@ -47,12 +47,35 @@ import type {
   Changes,
   FullSyncState,
   LiveQueryCollectionConfig,
+  SubscribeTrackedSourceRecordsOptions,
   SyncState,
+  TrackedSourceRecord,
+  TrackedSourceRecordsChange,
 } from './types.js'
 import type { AllCollectionEvents } from '../../collection/events.js'
 
 export type LiveQueryCollectionUtils = UtilsRecord & {
   getRunCount: () => number
+  /**
+   * Gets the source collection records currently tracked by this live query.
+   *
+   * Only records needed by active subscribers are exposed. If the live query has
+   * no subscribers, this returns an empty array even if the query is still warm in memory.
+   */
+  getTrackedSourceRecords: () => Array<TrackedSourceRecord>
+  /**
+   * Subscribes to changes in the source collection records currently tracked by this live query.
+   *
+   * The callback is driven by source-record membership in the live query rather than result-row
+   * changes. When the live query loses its last subscriber, all currently tracked records are
+   * emitted as removed immediately.
+   *
+   * @returns Unsubscribe function
+   */
+  subscribeTrackedSourceRecords: (
+    callback: (changes: TrackedSourceRecordsChange) => void,
+    options?: SubscribeTrackedSourceRecordsOptions,
+  ) => () => void
   /**
    * Sets the offset and limit of an ordered query.
    * Is a no-op if the query is not ordered.
@@ -71,6 +94,11 @@ export type LiveQueryCollectionUtils = UtilsRecord & {
 
 type PendingGraphRun = {
   loadCallbacks: Set<() => boolean>
+}
+
+type TrackedSourceRecordEntry = {
+  record: TrackedSourceRecord
+  refCount: number
 }
 
 // Global counter for auto-generated collection IDs
@@ -138,6 +166,15 @@ export class CollectionConfigBuilder<
     SchedulerContextId,
     PendingGraphRun
   >()
+
+  private readonly trackedSourceRecords = new Map<
+    string,
+    TrackedSourceRecordEntry
+  >()
+  private readonly trackedSourceRecordListeners = new Set<
+    (changes: TrackedSourceRecordsChange) => void
+  >()
+  private hasExposedTrackedSourceRecords = false
 
   // Unsubscribe function for scheduler's onClear listener
   // Registered when sync starts, unregistered when sync stops
@@ -241,6 +278,9 @@ export class CollectionConfigBuilder<
       singleResult: this.query.singleResult,
       utils: {
         getRunCount: this.getRunCount.bind(this),
+        getTrackedSourceRecords: this.getTrackedSourceRecords.bind(this),
+        subscribeTrackedSourceRecords:
+          this.subscribeTrackedSourceRecords.bind(this),
         setWindow: this.setWindow.bind(this),
         getWindow: this.getWindow.bind(this),
         [LIVE_QUERY_INTERNAL]: {
@@ -577,6 +617,123 @@ export class CollectionConfigBuilder<
     return this.runCount
   }
 
+  getTrackedSourceRecords(): Array<TrackedSourceRecord> {
+    if (!this.shouldExposeTrackedSourceRecords()) {
+      return []
+    }
+
+    return this.getTrackedSourceRecordsSnapshot()
+  }
+
+  subscribeTrackedSourceRecords(
+    callback: (changes: TrackedSourceRecordsChange) => void,
+    options?: SubscribeTrackedSourceRecordsOptions,
+  ): () => void {
+    this.trackedSourceRecordListeners.add(callback)
+
+    if (options?.includeInitialState) {
+      const added = this.getTrackedSourceRecords()
+      if (added.length > 0) {
+        callback({ added, removed: [] })
+      }
+    }
+
+    return () => {
+      this.trackedSourceRecordListeners.delete(callback)
+    }
+  }
+
+  applyTrackedSourceRecordChanges(
+    collectionId: string,
+    changes: Iterable<
+      Pick<ChangeMessage<object, string | number>, `type` | `key`>
+    >,
+  ) {
+    const added: Array<TrackedSourceRecord> = []
+    const removed: Array<TrackedSourceRecord> = []
+
+    for (const change of changes) {
+      if (change.type === `insert`) {
+        const record = { collectionId, key: change.key }
+        const serializedRecord = this.serializeTrackedSourceRecord(record)
+        const existing = this.trackedSourceRecords.get(serializedRecord)
+
+        if (existing) {
+          existing.refCount++
+        } else {
+          this.trackedSourceRecords.set(serializedRecord, {
+            record,
+            refCount: 1,
+          })
+          added.push(record)
+        }
+      } else if (change.type === `delete`) {
+        const record = { collectionId, key: change.key }
+        const serializedRecord = this.serializeTrackedSourceRecord(record)
+        const existing = this.trackedSourceRecords.get(serializedRecord)
+        if (!existing) {
+          continue
+        }
+
+        if (existing.refCount === 1) {
+          this.trackedSourceRecords.delete(serializedRecord)
+          removed.push(existing.record)
+        } else {
+          existing.refCount--
+        }
+      }
+    }
+
+    this.emitTrackedSourceRecordChanges({ added, removed })
+  }
+
+  clearTrackedSourceRecordsForCollection(
+    collectionId: string,
+    keys: Iterable<string | number>,
+  ) {
+    this.applyTrackedSourceRecordChanges(
+      collectionId,
+      Array.from(keys, (key) => ({
+        type: `delete` as const,
+        key,
+      })),
+    )
+  }
+
+  private emitTrackedSourceRecordChanges(
+    changes: TrackedSourceRecordsChange,
+    force = false,
+  ) {
+    if (changes.added.length === 0 && changes.removed.length === 0) {
+      return
+    }
+
+    if (!force && !this.shouldExposeTrackedSourceRecords()) {
+      return
+    }
+
+    this.hasExposedTrackedSourceRecords = true
+
+    for (const listener of this.trackedSourceRecordListeners) {
+      listener(changes)
+    }
+  }
+
+  private getTrackedSourceRecordsSnapshot(): Array<TrackedSourceRecord> {
+    return Array.from(
+      this.trackedSourceRecords.values(),
+      ({ record }) => record,
+    )
+  }
+
+  private shouldExposeTrackedSourceRecords(): boolean {
+    return (this.liveQueryCollection?.subscriberCount ?? 0) > 0
+  }
+
+  private serializeTrackedSourceRecord(record: TrackedSourceRecord): string {
+    return serializeValue([record.collectionId, record.key])
+  }
+
   private syncFn(config: SyncMethods<TResult>) {
     // Store reference to the live query collection for error state transitions
     this.liveQueryCollection = config.collection
@@ -618,6 +775,39 @@ export class CollectionConfigBuilder<
       },
     )
     syncState.unsubscribeCallbacks.add(loadingSubsetUnsubscribe)
+
+    const trackedSubscribersUnsubscribe = config.collection.on(
+      `subscribers:change`,
+      (event) => {
+        if (
+          event.previousSubscriberCount === 0 &&
+          event.subscriberCount > 0
+        ) {
+          if (!this.hasExposedTrackedSourceRecords) {
+            this.emitTrackedSourceRecordChanges(
+              {
+                added: this.getTrackedSourceRecordsSnapshot(),
+                removed: [],
+              },
+              true,
+            )
+          }
+        } else if (
+          event.previousSubscriberCount > 0 &&
+          event.subscriberCount === 0
+        ) {
+          this.emitTrackedSourceRecordChanges(
+            {
+              added: [],
+              removed: this.getTrackedSourceRecordsSnapshot(),
+            },
+            true,
+          )
+          this.hasExposedTrackedSourceRecords = false
+        }
+      },
+    )
+    syncState.unsubscribeCallbacks.add(trackedSubscribersUnsubscribe)
 
     const loadSubsetDataCallbacks = this.subscribeToAllCollections(
       config,
