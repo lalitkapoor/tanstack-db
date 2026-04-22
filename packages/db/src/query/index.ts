@@ -85,10 +85,12 @@ export {
 export { queryOnce, type QueryOnceConfig } from './query-once.js'
 
 export type {
-  LiveQueryCollectionConfig,
   SubscribeTrackedSourceRecordsOptions,
   TrackedSourceRecord,
   TrackedSourceRecordsChange,
+} from '../types.js'
+export type {
+  LiveQueryCollectionConfig,
 } from './live/types.js'
 export { type LiveQueryCollectionUtils } from './live/collection-config-builder.js'
 

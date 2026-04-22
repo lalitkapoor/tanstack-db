@@ -4,6 +4,10 @@ import {
   CollectionRequiresSyncConfigError,
 } from '../errors'
 import { currentStateAsChanges } from './change-events'
+import {
+  getTrackedSourceRecords,
+  subscribeTrackedSourceRecords,
+} from './tracked-source-records.js'
 
 import { CollectionStateManager } from './state'
 import { CollectionChangesManager } from './changes'
@@ -34,6 +38,7 @@ import type {
   SingleResult,
   StringCollationConfig,
   SubscribeChangesOptions,
+  TrackedSourceCollectionUtils,
   Transaction as TransactionType,
   UtilsRecord,
   WritableDeep,
@@ -58,7 +63,7 @@ export interface Collection<
   TSchema extends StandardSchemaV1 = StandardSchemaV1,
   TInsertInput extends object = T,
 > extends CollectionImpl<T, TKey, TUtils, TSchema, TInsertInput> {
-  readonly utils: TUtils
+  readonly utils: TUtils & TrackedSourceCollectionUtils
   readonly singleResult?: true
 }
 
@@ -260,10 +265,11 @@ export function createCollection(
   )
 
   // Attach utils to collection
-  if (options.utils) {
-    collection.utils = options.utils
-  } else {
-    collection.utils = {}
+  collection.utils = {
+    getTrackedSourceRecords: () => getTrackedSourceRecords(collection),
+    subscribeTrackedSourceRecords: (callback, trackingOptions) =>
+      subscribeTrackedSourceRecords(collection, callback, trackingOptions),
+    ...(options.utils ?? {}),
   }
 
   return collection
@@ -281,7 +287,10 @@ export class CollectionImpl<
 
   // Utilities namespace
   // This is populated by createCollection
-  public utils: Record<string, Fn> = {}
+  public utils: TrackedSourceCollectionUtils & Record<string, Fn> = {
+    getTrackedSourceRecords: () => [],
+    subscribeTrackedSourceRecords: () => () => {},
+  }
 
   // Managers
   private _events: CollectionEventsManager

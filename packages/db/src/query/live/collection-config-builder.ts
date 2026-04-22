@@ -1,6 +1,7 @@
 import { D2, output, serializeValue } from '@tanstack/db-ivm'
 import { INCLUDES_ROUTING, compileQuery } from '../compiler/index.js'
 import { createCollection } from '../../collection/index.js'
+import { applyTrackedSourceRecordChanges as applyTrackedSourceRecordChangesToCollection } from '../../collection/tracked-source-records.js'
 import {
   MissingAliasInputsError,
   SetWindowRequiresOrderByError,
@@ -32,7 +33,11 @@ import type {
   KeyedStream,
   ResultStream,
   StringCollationConfig,
+  SubscribeTrackedSourceRecordsOptions,
   SyncConfig,
+  TrackedSourceCollectionUtils,
+  TrackedSourceRecord,
+  TrackedSourceRecordsChange,
   UtilsRecord,
 } from '../../types.js'
 import type { Context, GetResult } from '../builder/types.js'
@@ -47,35 +52,13 @@ import type {
   Changes,
   FullSyncState,
   LiveQueryCollectionConfig,
-  SubscribeTrackedSourceRecordsOptions,
   SyncState,
-  TrackedSourceRecord,
-  TrackedSourceRecordsChange,
 } from './types.js'
 import type { AllCollectionEvents } from '../../collection/events.js'
 
-export type LiveQueryCollectionUtils = UtilsRecord & {
+export type LiveQueryCollectionUtils = UtilsRecord &
+  TrackedSourceCollectionUtils & {
   getRunCount: () => number
-  /**
-   * Gets the source collection records currently tracked by this live query.
-   *
-   * Only records needed by active subscribers are exposed. If the live query has
-   * no subscribers, this returns an empty array even if the query is still warm in memory.
-   */
-  getTrackedSourceRecords: () => Array<TrackedSourceRecord>
-  /**
-   * Subscribes to changes in the source collection records currently tracked by this live query.
-   *
-   * The callback is driven by source-record membership in the live query rather than result-row
-   * changes. When the live query loses its last subscriber, all currently tracked records are
-   * emitted as removed immediately.
-   *
-   * @returns Unsubscribe function
-   */
-  subscribeTrackedSourceRecords: (
-    callback: (changes: TrackedSourceRecordsChange) => void,
-    options?: SubscribeTrackedSourceRecordsOptions,
-  ) => () => void
   /**
    * Sets the offset and limit of an ordered query.
    * Is a no-op if the query is not ordered.
@@ -713,9 +696,47 @@ export class CollectionConfigBuilder<
     }
 
     this.hasExposedTrackedSourceRecords = true
+    this.applyTrackedSourceRecordChangesToSourceCollections(changes)
 
     for (const listener of this.trackedSourceRecordListeners) {
       listener(changes)
+    }
+  }
+
+  private applyTrackedSourceRecordChangesToSourceCollections(
+    changes: TrackedSourceRecordsChange,
+  ) {
+    const keysByCollectionId = new Map<
+      string,
+      { added: Array<string | number>; removed: Array<string | number> }
+    >()
+
+    for (const record of changes.added) {
+      const entry = keysByCollectionId.get(record.collectionId) ?? {
+        added: [],
+        removed: [],
+      }
+      entry.added.push(record.key)
+      keysByCollectionId.set(record.collectionId, entry)
+    }
+
+    for (const record of changes.removed) {
+      const entry = keysByCollectionId.get(record.collectionId) ?? {
+        added: [],
+        removed: [],
+      }
+      entry.removed.push(record.key)
+      keysByCollectionId.set(record.collectionId, entry)
+    }
+
+    for (const [collectionId, collectionChanges] of keysByCollectionId) {
+      const collection = this.collections[collectionId]
+
+      if (!collection) {
+        continue
+      }
+
+      applyTrackedSourceRecordChangesToCollection(collection, collectionChanges)
     }
   }
 
