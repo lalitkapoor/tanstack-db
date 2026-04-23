@@ -38,7 +38,9 @@ import type {
   SingleResult,
   StringCollationConfig,
   SubscribeChangesOptions,
+  SubscribeTrackedSourceRecordsOptions,
   TrackedSourceCollectionUtils,
+  TrackedSourceRecordsChange,
   Transaction as TransactionType,
   UtilsRecord,
   WritableDeep,
@@ -264,13 +266,27 @@ export function createCollection(
     options,
   )
 
-  // Attach utils to collection
-  collection.utils = {
-    getTrackedSourceRecords: () => getTrackedSourceRecords(collection),
-    subscribeTrackedSourceRecords: (callback, trackingOptions) =>
-      subscribeTrackedSourceRecords(collection, callback, trackingOptions),
-    ...(options.utils ?? {}),
+  const baseUtils = options.utils ?? {}
+  const mergedUtils = Object.create(
+    Object.getPrototypeOf(baseUtils),
+    Object.getOwnPropertyDescriptors(baseUtils),
+  )
+
+  // Attach base tracked-source helpers while preserving getter-backed utility
+  // objects and allowing custom utils to override them.
+  if (!(`getTrackedSourceRecords` in mergedUtils)) {
+    mergedUtils.getTrackedSourceRecords = () =>
+      getTrackedSourceRecords(collection)
   }
+
+  if (!(`subscribeTrackedSourceRecords` in mergedUtils)) {
+    mergedUtils.subscribeTrackedSourceRecords = (
+      callback: (changes: TrackedSourceRecordsChange) => void,
+      trackingOptions?: SubscribeTrackedSourceRecordsOptions,
+    ) => subscribeTrackedSourceRecords(collection, callback, trackingOptions)
+  }
+
+  collection.utils = mergedUtils
 
   return collection
 }

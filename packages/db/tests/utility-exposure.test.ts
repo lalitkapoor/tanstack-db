@@ -8,6 +8,18 @@ interface TestUtils extends UtilsRecord {
   asyncFn: (input: number) => Promise<number>
 }
 
+class GetterBackedUtils {
+  constructor(private readonly active: boolean) {}
+
+  public get isActive() {
+    return this.active
+  }
+
+  public describe() {
+    return this.active ? `active` : `inactive`
+  }
+}
+
 describe(`Utility exposure pattern`, () => {
   test(`exposes utilities at top level and under .utils namespace`, () => {
     // Create mock utility functions
@@ -101,5 +113,20 @@ describe(`Utility exposure pattern`, () => {
     // TypeScript knows the collection is for TestItem type
     // This is a compile-time check that we can't verify at runtime directly
     // But we've verified the utilities work
+  })
+
+  test(`preserves getter-backed utility objects when attaching tracked source helpers`, () => {
+    const collection = createCollection({
+      getKey: (item: { id: string }) => item.id,
+      sync: {
+        sync: () => {},
+      },
+      utils: new GetterBackedUtils(true),
+    })
+
+    expect(collection.utils.isActive).toBe(true)
+    expect(collection.utils.describe()).toBe(`active`)
+    expect(collection.utils.getTrackedSourceRecords).toBeDefined()
+    expect(collection.utils.subscribeTrackedSourceRecords).toBeDefined()
   })
 })

@@ -89,9 +89,7 @@ export type {
   TrackedSourceRecord,
   TrackedSourceRecordsChange,
 } from '../types.js'
-export type {
-  LiveQueryCollectionConfig,
-} from './live/types.js'
+export type { LiveQueryCollectionConfig } from './live/types.js'
 export { type LiveQueryCollectionUtils } from './live/collection-config-builder.js'
 
 // Predicate utilities for predicate push-down
