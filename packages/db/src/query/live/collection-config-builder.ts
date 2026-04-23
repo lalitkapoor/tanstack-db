@@ -56,24 +56,26 @@ import type {
 } from './types.js'
 import type { AllCollectionEvents } from '../../collection/events.js'
 
-export type LiveQueryCollectionUtils = UtilsRecord &
-  TrackedSourceCollectionUtils & {
-    getRunCount: () => number
-    /**
-     * Sets the offset and limit of an ordered query.
-     * Is a no-op if the query is not ordered.
-     *
-     * @returns `true` if no subset loading was triggered, or `Promise<void>` that resolves when the subset has been loaded
-     */
-    setWindow: (options: WindowOptions) => true | Promise<void>
-    /**
-     * Gets the current window (offset and limit) for an ordered query.
-     *
-     * @returns The current window settings, or `undefined` if the query is not windowed
-     */
-    getWindow: () => { offset: number; limit: number } | undefined
-    [LIVE_QUERY_INTERNAL]: LiveQueryInternalUtils
-  }
+export type LiveQueryBuiltInUtils = TrackedSourceCollectionUtils & {
+  getRunCount: () => number
+  /**
+   * Sets the offset and limit of an ordered query.
+   * Is a no-op if the query is not ordered.
+   *
+   * @returns `true` if no subset loading was triggered, or `Promise<void>` that resolves when the subset has been loaded
+   */
+  setWindow: (options: WindowOptions) => true | Promise<void>
+  /**
+   * Gets the current window (offset and limit) for an ordered query.
+   *
+   * @returns The current window settings, or `undefined` if the query is not windowed
+   */
+  getWindow: () => { offset: number; limit: number } | undefined
+  [LIVE_QUERY_INTERNAL]: LiveQueryInternalUtils
+}
+
+export type LiveQueryCollectionUtils<TUtils extends UtilsRecord = {}> = TUtils &
+  LiveQueryBuiltInUtils
 
 type PendingGraphRun = {
   loadCallbacks: Set<() => boolean>
@@ -230,7 +232,7 @@ export class CollectionConfigBuilder<
   }
 
   getConfig(): CollectionConfigSingleRowOption<TResult> & {
-    utils: LiveQueryCollectionUtils
+    utils: LiveQueryBuiltInUtils
   } {
     return {
       id: this.id,

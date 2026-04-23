@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { createCollection } from '../src/collection/index.js'
+import { createLiveQueryCollection } from '../src/query/index.js'
 import type { CollectionConfig, SyncConfig, UtilsRecord } from '../src/types'
 
 // Mock utility functions for testing
@@ -116,17 +117,41 @@ describe(`Utility exposure pattern`, () => {
   })
 
   test(`preserves getter-backed utility objects when attaching tracked source helpers`, () => {
+    const utils = new GetterBackedUtils(true)
     const collection = createCollection({
       getKey: (item: { id: string }) => item.id,
       sync: {
         sync: () => {},
       },
-      utils: new GetterBackedUtils(true),
+      utils,
     })
 
+    expect(collection.utils).toBe(utils)
     expect(collection.utils.isActive).toBe(true)
     expect(collection.utils.describe()).toBe(`active`)
     expect(collection.utils.getTrackedSourceRecords).toBeDefined()
     expect(collection.utils.subscribeTrackedSourceRecords).toBeDefined()
+  })
+
+  test(`preserves custom live query utils while attaching live query helpers`, () => {
+    const source = createCollection({
+      getKey: (item: { id: string }) => item.id,
+      sync: {
+        sync: () => {},
+      },
+    })
+    const utils = {
+      describeMode: () => `search`,
+    }
+    const liveQuery = createLiveQueryCollection({
+      query: (q) => q.from({ source }),
+      utils,
+    })
+
+    expect(liveQuery.utils).toBe(utils)
+    expect(liveQuery.utils.describeMode()).toBe(`search`)
+    expect(liveQuery.utils.getRunCount).toBeDefined()
+    expect(liveQuery.utils.getTrackedSourceRecords).toBeDefined()
+    expect(liveQuery.utils.subscribeTrackedSourceRecords).toBeDefined()
   })
 })

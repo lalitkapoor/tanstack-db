@@ -90,7 +90,7 @@ export type {
   TrackedSourceRecordsChange,
 } from '../types.js'
 export type { LiveQueryCollectionConfig } from './live/types.js'
-export { type LiveQueryCollectionUtils } from './live/collection-config-builder.js'
+export { type LiveQueryCollectionUtils } from './live-query-collection.js'
 
 // Predicate utilities for predicate push-down
 export {

@@ -107,6 +107,9 @@ export type TrackedSourceCollectionUtils = {
   ) => () => void
 }
 
+export type CollectionUtils<TUtils extends UtilsRecord = {}> = TUtils &
+  TrackedSourceCollectionUtils
+
 /**
  *
  * @remarks `update` and `insert` are both represented as `Partial<T>`, but changes for `insert` could me made more precise by inferring the schema input type. In practice, this has almost 0 real world impact so it's not worth the added type complexity.

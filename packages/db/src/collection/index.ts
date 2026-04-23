@@ -28,8 +28,8 @@ import type {
   ChangeMessage,
   CollectionConfig,
   CollectionStatus,
+  CollectionUtils,
   CurrentStateAsChangesOptions,
-  Fn,
   InferSchemaInput,
   InferSchemaOutput,
   InsertConfig,
@@ -39,7 +39,6 @@ import type {
   StringCollationConfig,
   SubscribeChangesOptions,
   SubscribeTrackedSourceRecordsOptions,
-  TrackedSourceCollectionUtils,
   TrackedSourceRecordsChange,
   Transaction as TransactionType,
   UtilsRecord,
@@ -65,8 +64,19 @@ export interface Collection<
   TSchema extends StandardSchemaV1 = StandardSchemaV1,
   TInsertInput extends object = T,
 > extends CollectionImpl<T, TKey, TUtils, TSchema, TInsertInput> {
-  readonly utils: TUtils & TrackedSourceCollectionUtils
+  readonly utils: CollectionUtils<TUtils>
   readonly singleResult?: true
+}
+
+function installBaseTrackedSourceCollectionUtils(
+  collection: CollectionImpl<any, any, any, any, any>,
+  utils: UtilsRecord,
+): asserts utils is CollectionUtils<UtilsRecord> {
+  utils.getTrackedSourceRecords = () => getTrackedSourceRecords(collection)
+  utils.subscribeTrackedSourceRecords = (
+    callback: (changes: TrackedSourceRecordsChange) => void,
+    trackingOptions?: SubscribeTrackedSourceRecordsOptions,
+  ) => subscribeTrackedSourceRecords(collection, callback, trackingOptions)
 }
 
 /**
@@ -265,28 +275,10 @@ export function createCollection(
   const collection = new CollectionImpl<any, string | number, any, any, any>(
     options,
   )
+  const utils = options.utils ?? {}
 
-  const baseUtils = options.utils ?? {}
-  const mergedUtils = Object.create(
-    Object.getPrototypeOf(baseUtils),
-    Object.getOwnPropertyDescriptors(baseUtils),
-  )
-
-  // Attach base tracked-source helpers while preserving getter-backed utility
-  // objects and allowing custom utils to override them.
-  if (!(`getTrackedSourceRecords` in mergedUtils)) {
-    mergedUtils.getTrackedSourceRecords = () =>
-      getTrackedSourceRecords(collection)
-  }
-
-  if (!(`subscribeTrackedSourceRecords` in mergedUtils)) {
-    mergedUtils.subscribeTrackedSourceRecords = (
-      callback: (changes: TrackedSourceRecordsChange) => void,
-      trackingOptions?: SubscribeTrackedSourceRecordsOptions,
-    ) => subscribeTrackedSourceRecords(collection, callback, trackingOptions)
-  }
-
-  collection.utils = mergedUtils
+  installBaseTrackedSourceCollectionUtils(collection, utils)
+  collection.utils = utils
 
   return collection
 }
@@ -303,10 +295,7 @@ export class CollectionImpl<
 
   // Utilities namespace
   // This is populated by createCollection
-  public utils: TrackedSourceCollectionUtils & Record<string, Fn> = {
-    getTrackedSourceRecords: () => [],
-    subscribeTrackedSourceRecords: () => () => {},
-  }
+  public utils!: CollectionUtils<TUtils>
 
   // Managers
   private _events: CollectionEventsManager
