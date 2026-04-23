@@ -58,22 +58,22 @@ import type { AllCollectionEvents } from '../../collection/events.js'
 
 export type LiveQueryCollectionUtils = UtilsRecord &
   TrackedSourceCollectionUtils & {
-  getRunCount: () => number
-  /**
-   * Sets the offset and limit of an ordered query.
-   * Is a no-op if the query is not ordered.
-   *
-   * @returns `true` if no subset loading was triggered, or `Promise<void>` that resolves when the subset has been loaded
-   */
-  setWindow: (options: WindowOptions) => true | Promise<void>
-  /**
-   * Gets the current window (offset and limit) for an ordered query.
-   *
-   * @returns The current window settings, or `undefined` if the query is not windowed
-   */
-  getWindow: () => { offset: number; limit: number } | undefined
-  [LIVE_QUERY_INTERNAL]: LiveQueryInternalUtils
-}
+    getRunCount: () => number
+    /**
+     * Sets the offset and limit of an ordered query.
+     * Is a no-op if the query is not ordered.
+     *
+     * @returns `true` if no subset loading was triggered, or `Promise<void>` that resolves when the subset has been loaded
+     */
+    setWindow: (options: WindowOptions) => true | Promise<void>
+    /**
+     * Gets the current window (offset and limit) for an ordered query.
+     *
+     * @returns The current window settings, or `undefined` if the query is not windowed
+     */
+    getWindow: () => { offset: number; limit: number } | undefined
+    [LIVE_QUERY_INTERNAL]: LiveQueryInternalUtils
+  }
 
 type PendingGraphRun = {
   loadCallbacks: Set<() => boolean>
@@ -669,13 +669,10 @@ export class CollectionConfigBuilder<
     collectionId: string,
     keys: Iterable<string | number>,
   ) {
-    this.applyTrackedSourceRecordChanges(
-      collectionId,
-      {
-        added: [],
-        removed: keys,
-      },
-    )
+    this.applyTrackedSourceRecordChanges(collectionId, {
+      added: [],
+      removed: keys,
+    })
   }
 
   private emitTrackedSourceRecordChanges(
@@ -799,10 +796,7 @@ export class CollectionConfigBuilder<
     const trackedSubscribersUnsubscribe = config.collection.on(
       `subscribers:change`,
       (event) => {
-        if (
-          event.previousSubscriberCount === 0 &&
-          event.subscriberCount > 0
-        ) {
+        if (event.previousSubscriberCount === 0 && event.subscriberCount > 0) {
           if (!fullSyncState.hasExposedTrackedSourceRecords) {
             this.emitTrackedSourceRecordChanges(
               {

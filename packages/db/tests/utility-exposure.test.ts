@@ -55,9 +55,12 @@ describe(`Utility exposure pattern`, () => {
       sync: mockSync,
     })
 
-    // Verify .utils exists but is empty
+    // Collections always expose tracked-source helpers, even without custom utils
     expect(collection.utils).toBeDefined()
-    expect(Object.keys(collection.utils).length).toBe(0)
+    expect(Object.keys(collection.utils).sort()).toEqual([
+      `getTrackedSourceRecords`,
+      `subscribeTrackedSourceRecords`,
+    ])
   })
 
   test(`preserves type information for collection data`, async () => {

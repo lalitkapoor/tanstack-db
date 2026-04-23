@@ -139,11 +139,12 @@ describe(`createLiveQueryCollection`, () => {
     const subscription = activeUsers.subscribeChanges(() => {})
     await activeUsers.preload()
 
-    expect(sortTrackedSourceRecords(activeUsers.utils.getTrackedSourceRecords()))
-      .toEqual([
-        { collectionId: usersCollection.id, key: 1 },
-        { collectionId: usersCollection.id, key: 2 },
-      ])
+    expect(
+      sortTrackedSourceRecords(activeUsers.utils.getTrackedSourceRecords()),
+    ).toEqual([
+      { collectionId: usersCollection.id, key: 1 },
+      { collectionId: usersCollection.id, key: 2 },
+    ])
 
     subscription.unsubscribe()
 
@@ -241,15 +242,16 @@ describe(`createLiveQueryCollection`, () => {
 
     expect(usersCollection.utils.getTrackedSourceRecords()).toEqual([])
 
-    const unsubscribeTracked = usersCollection.utils.subscribeTrackedSourceRecords(
-      (changes) => {
-        trackingEvents.push({
-          added: sortTrackedSourceRecords(changes.added),
-          removed: sortTrackedSourceRecords(changes.removed),
-        })
-      },
-      { includeInitialState: true },
-    )
+    const unsubscribeTracked =
+      usersCollection.utils.subscribeTrackedSourceRecords(
+        (changes) => {
+          trackingEvents.push({
+            added: sortTrackedSourceRecords(changes.added),
+            removed: sortTrackedSourceRecords(changes.removed),
+          })
+        },
+        { includeInitialState: true },
+      )
 
     const subscription = activeUsers.subscribeChanges(() => {})
     await activeUsers.preload()
@@ -301,15 +303,16 @@ describe(`createLiveQueryCollection`, () => {
       removed: Array<{ collectionId: string; key: string | number }>
     }> = []
 
-    const unsubscribeTracked = usersCollection.utils.subscribeTrackedSourceRecords(
-      (changes) => {
-        trackingEvents.push({
-          added: sortTrackedSourceRecords(changes.added),
-          removed: sortTrackedSourceRecords(changes.removed),
-        })
-      },
-      { includeInitialState: true },
-    )
+    const unsubscribeTracked =
+      usersCollection.utils.subscribeTrackedSourceRecords(
+        (changes) => {
+          trackingEvents.push({
+            added: sortTrackedSourceRecords(changes.added),
+            removed: sortTrackedSourceRecords(changes.removed),
+          })
+        },
+        { includeInitialState: true },
+      )
 
     const activeUsersSubscription = activeUsers.subscribeChanges(() => {})
     await activeUsers.preload()
@@ -398,13 +401,14 @@ describe(`createLiveQueryCollection`, () => {
     const liveTrackingEvents: Array<TrackedSourceRecordsChange> = []
     const baseTrackingEvents: Array<TrackedSourceRecordsChange> = []
 
-    const unsubscribeLiveTracked =
-      topItems.utils.subscribeTrackedSourceRecords((changes) => {
+    const unsubscribeLiveTracked = topItems.utils.subscribeTrackedSourceRecords(
+      (changes) => {
         liveTrackingEvents.push({
           added: sortTrackedSourceRecords(changes.added),
           removed: sortTrackedSourceRecords(changes.removed),
         })
-      })
+      },
+    )
     const unsubscribeBaseTracked =
       sourceCollection.utils.subscribeTrackedSourceRecords((changes) => {
         baseTrackingEvents.push({
@@ -416,7 +420,9 @@ describe(`createLiveQueryCollection`, () => {
     const subscription = topItems.subscribeChanges(() => {})
     await topItems.preload()
 
-    expect(sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords())).toEqual([
+    expect(
+      sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords()),
+    ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
     ])
@@ -431,12 +437,16 @@ describe(`createLiveQueryCollection`, () => {
 
     expect(liveTrackingEvents).toEqual([])
     expect(baseTrackingEvents).toEqual([])
-    expect(sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords())).toEqual([
+    expect(
+      sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords()),
+    ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
     ])
     expect(
-      sortTrackedSourceRecords(sourceCollection.utils.getTrackedSourceRecords()),
+      sortTrackedSourceRecords(
+        sourceCollection.utils.getTrackedSourceRecords(),
+      ),
     ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
@@ -450,9 +460,7 @@ describe(`createLiveQueryCollection`, () => {
   it(`should not emit tracked source churn across truncate refetch when ordered queries keep tracking the same keys`, async () => {
     type Item = { id: number; value: string; rank: number }
 
-    let syncOps:
-      | Parameters<SyncConfig<Item>[`sync`]>[0]
-      | undefined
+    let syncOps: Parameters<SyncConfig<Item>[`sync`]>[0] | undefined
     let loadSubsetCallCount = 0
     let loadSubsetResolver: (() => void) | undefined
 
@@ -502,13 +510,14 @@ describe(`createLiveQueryCollection`, () => {
     const liveTrackingEvents: Array<TrackedSourceRecordsChange> = []
     const baseTrackingEvents: Array<TrackedSourceRecordsChange> = []
 
-    const unsubscribeLiveTracked =
-      topItems.utils.subscribeTrackedSourceRecords((changes) => {
+    const unsubscribeLiveTracked = topItems.utils.subscribeTrackedSourceRecords(
+      (changes) => {
         liveTrackingEvents.push({
           added: sortTrackedSourceRecords(changes.added),
           removed: sortTrackedSourceRecords(changes.removed),
         })
-      })
+      },
+    )
     const unsubscribeBaseTracked =
       sourceCollection.utils.subscribeTrackedSourceRecords((changes) => {
         baseTrackingEvents.push({
@@ -524,7 +533,9 @@ describe(`createLiveQueryCollection`, () => {
     loadSubsetResolver?.()
     await preloadPromise
 
-    expect(sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords())).toEqual([
+    expect(
+      sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords()),
+    ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
     ])
@@ -546,12 +557,16 @@ describe(`createLiveQueryCollection`, () => {
 
     expect(liveTrackingEvents).toEqual([])
     expect(baseTrackingEvents).toEqual([])
-    expect(sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords())).toEqual([
+    expect(
+      sortTrackedSourceRecords(topItems.utils.getTrackedSourceRecords()),
+    ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
     ])
     expect(
-      sortTrackedSourceRecords(sourceCollection.utils.getTrackedSourceRecords()),
+      sortTrackedSourceRecords(
+        sourceCollection.utils.getTrackedSourceRecords(),
+      ),
     ).toEqual([
       { collectionId: sourceCollection.id, key: 1 },
       { collectionId: sourceCollection.id, key: 2 },
