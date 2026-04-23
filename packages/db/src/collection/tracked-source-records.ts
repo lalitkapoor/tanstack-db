@@ -1,167 +1,55 @@
 import { serializeValue } from '@tanstack/db-ivm'
-import type { Collection } from './index.js'
+import { RefCountedKeyedSet } from './ref-counted-keyed-set.js'
 import type {
-  SubscribeTrackedSourceRecordsOptions,
-  TrackedSourceRecord,
-  TrackedSourceRecordsChange,
+	SubscribeTrackedSourceRecordsOptions,
+	TrackedSourceRecord,
+	TrackedSourceRecordsChange,
 } from '../types.js'
 
-type TrackedSourceRecordEntry<TKey extends string | number> = {
-  key: TKey
-  refCount: number
-}
-
-class CollectionTrackedSourceRecordsManager<
-  TKey extends string | number = string | number,
+/**
+ * Per-base-collection tracked source records manager.
+ *
+ * Refcounts over active live queries that depend on this collection. Each
+ * live query's `LiveQueryTrackedSourceRecordsAggregator` pushes its net
+ * alias-level transitions here; this manager dedupes across queries and
+ * emits to subscribers only on true 0↔1 transitions.
+ *
+ * Lives as a real field on `CollectionImpl` — not a WeakMap lookup, not
+ * utils-injection.
+ */
+export class TrackedSourceRecordsManager<
+	TKey extends string | number = string | number,
 > {
-  private readonly trackedSourceRecords = new Map<
-    string,
-    TrackedSourceRecordEntry<TKey>
-  >()
-  private readonly listeners = new Set<
-    (changes: TrackedSourceRecordsChange) => void
-  >()
+	private readonly set = new RefCountedKeyedSet<TKey>((key) =>
+		serializeValue(key),
+	)
 
-  constructor(private readonly collectionId: string) {}
+	constructor(private readonly collectionId: string) {}
 
-  getTrackedSourceRecords(): Array<TrackedSourceRecord> {
-    return this.getTrackedSourceRecordsSnapshot()
-  }
+	apply(added: Iterable<TKey>, removed: Iterable<TKey>): void {
+		this.set.apply(added, removed)
+	}
 
-  subscribeTrackedSourceRecords(
-    callback: (changes: TrackedSourceRecordsChange) => void,
-    options?: SubscribeTrackedSourceRecordsOptions,
-  ): () => void {
-    this.listeners.add(callback)
+	get(): Array<TrackedSourceRecord> {
+		return this.set.snapshot().map((key) => this.toRecord(key))
+	}
 
-    if (options?.includeInitialState) {
-      const added = this.getTrackedSourceRecordsSnapshot()
+	subscribe(
+		callback: (changes: TrackedSourceRecordsChange) => void,
+		options?: SubscribeTrackedSourceRecordsOptions,
+	): () => void {
+		return this.set.subscribe(
+			({ added, removed }) => {
+				callback({
+					added: added.map((key) => this.toRecord(key)),
+					removed: removed.map((key) => this.toRecord(key)),
+				})
+			},
+			options,
+		)
+	}
 
-      if (added.length > 0) {
-        callback({ added, removed: [] })
-      }
-    }
-
-    return () => {
-      this.listeners.delete(callback)
-    }
-  }
-
-  applyTrackedSourceRecordChanges(changes: {
-    added: Iterable<TKey>
-    removed: Iterable<TKey>
-  }): void {
-    const added: Array<TrackedSourceRecord> = []
-    const removed: Array<TrackedSourceRecord> = []
-
-    for (const key of changes.added) {
-      const serializedKey = this.serializeKey(key)
-      const existing = this.trackedSourceRecords.get(serializedKey)
-
-      if (existing) {
-        existing.refCount += 1
-        continue
-      }
-
-      this.trackedSourceRecords.set(serializedKey, {
-        key,
-        refCount: 1,
-      })
-      added.push(this.toTrackedSourceRecord(key))
-    }
-
-    for (const key of changes.removed) {
-      const serializedKey = this.serializeKey(key)
-      const existing = this.trackedSourceRecords.get(serializedKey)
-
-      if (!existing) {
-        continue
-      }
-
-      if (existing.refCount > 1) {
-        existing.refCount -= 1
-        continue
-      }
-
-      this.trackedSourceRecords.delete(serializedKey)
-      removed.push(this.toTrackedSourceRecord(existing.key))
-    }
-
-    this.emitChanges({ added, removed })
-  }
-
-  private emitChanges(changes: TrackedSourceRecordsChange): void {
-    if (changes.added.length === 0 && changes.removed.length === 0) {
-      return
-    }
-
-    this.listeners.forEach((listener) => {
-      listener(changes)
-    })
-  }
-
-  private getTrackedSourceRecordsSnapshot(): Array<TrackedSourceRecord> {
-    return Array.from(this.trackedSourceRecords.values(), ({ key }) =>
-      this.toTrackedSourceRecord(key),
-    )
-  }
-
-  private toTrackedSourceRecord(key: TKey): TrackedSourceRecord {
-    return {
-      collectionId: this.collectionId,
-      key,
-    }
-  }
-
-  private serializeKey(key: TKey): string {
-    return serializeValue(key)
-  }
-}
-
-const collectionTrackedSourceRecordsManagers = new WeakMap<
-  Collection<any, any, any, any, any>,
-  CollectionTrackedSourceRecordsManager<any>
->()
-
-function getOrCreateCollectionTrackedSourceRecordsManager<
-  TKey extends string | number,
->(collection: Collection<any, TKey, any, any, any>) {
-  let manager = collectionTrackedSourceRecordsManagers.get(collection)
-
-  if (!manager) {
-    manager = new CollectionTrackedSourceRecordsManager<TKey>(collection.id)
-    collectionTrackedSourceRecordsManagers.set(collection, manager)
-  }
-
-  return manager as CollectionTrackedSourceRecordsManager<TKey>
-}
-
-export function getTrackedSourceRecords<TKey extends string | number>(
-  collection: Collection<any, TKey, any, any, any>,
-): Array<TrackedSourceRecord> {
-  return getOrCreateCollectionTrackedSourceRecordsManager(
-    collection,
-  ).getTrackedSourceRecords()
-}
-
-export function subscribeTrackedSourceRecords<TKey extends string | number>(
-  collection: Collection<any, TKey, any, any, any>,
-  callback: (changes: TrackedSourceRecordsChange) => void,
-  options?: SubscribeTrackedSourceRecordsOptions,
-): () => void {
-  return getOrCreateCollectionTrackedSourceRecordsManager(
-    collection,
-  ).subscribeTrackedSourceRecords(callback, options)
-}
-
-export function applyTrackedSourceRecordChanges<TKey extends string | number>(
-  collection: Collection<any, TKey, any, any, any>,
-  changes: {
-    added: Iterable<TKey>
-    removed: Iterable<TKey>
-  },
-): void {
-  getOrCreateCollectionTrackedSourceRecordsManager(
-    collection,
-  ).applyTrackedSourceRecordChanges(changes)
+	private toRecord(key: TKey): TrackedSourceRecord {
+		return { collectionId: this.collectionId, key }
+	}
 }

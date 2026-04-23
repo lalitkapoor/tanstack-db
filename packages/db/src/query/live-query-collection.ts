@@ -1,4 +1,4 @@
-import { CollectionImpl } from '../collection/index.js'
+import { createCollection } from '../collection/index.js'
 import { CollectionConfigBuilder } from './live/collection-config-builder.js'
 import {
   getBuilderFromConfig,
@@ -18,7 +18,6 @@ import type { Collection } from '../collection/index.js'
 import type {
   CollectionConfig,
   CollectionConfigSingleRowOption,
-  CollectionUtils,
   NonSingleResult,
   SingleResult,
   UtilsRecord,
@@ -50,13 +49,6 @@ type CollectionForContext<
 > = TContext extends SingleResult
   ? Collection<TResult, string | number, TUtils> & SingleResult
   : Collection<TResult, string | number, TUtils> & NonSingleResult
-
-function installLiveQueryCollectionUtils<TUtils extends UtilsRecord>(
-  customUtils: TUtils,
-  liveQueryUtils: LiveQueryBuiltInUtils,
-): asserts customUtils is LiveQueryCollectionUtils<TUtils> {
-  Object.assign(customUtils, liveQueryUtils)
-}
 
 /**
  * Creates live query collection options for use with createCollection
@@ -193,58 +185,50 @@ export function createLiveQueryCollection<
       TContext,
       TResult
     > & { utils: LiveQueryCollectionUtils<TUtils> }
-  } else {
-    // Config object case
-    const config = configOrQuery as LiveQueryCollectionConfig<
-      TContext,
-      TResult
-    > & { utils?: TUtils }
-    // Same overload implementation limitation as above: the config has already
-    // been validated by the public signatures, but the branch loses that precision.
-    const options = liveQueryCollectionOptions(config as any)
-
-    // Install live query built-ins onto the final utils object so createCollection
-    // does not need to resolve name conflicts with base tracked-source helpers.
-    if (config.utils) {
-      installLiveQueryCollectionUtils(config.utils, options.utils)
-      const mergedOptions = { ...options, utils: config.utils }
-
-      return bridgeToCreateCollection(mergedOptions) as CollectionForContext<
-        TContext,
-        TResult
-      > & { utils: LiveQueryCollectionUtils<TUtils> }
-    }
-
-    return bridgeToCreateCollection(options) as CollectionForContext<
-      TContext,
-      TResult
-    > & { utils: LiveQueryCollectionUtils<TUtils> }
   }
+
+  // Config object case. Same overload implementation limitation as above:
+  // the config has already been validated by the public signatures, but the
+  // branch loses that precision.
+  const config = configOrQuery as LiveQueryCollectionConfig<
+    TContext,
+    TResult
+  > & { utils?: TUtils }
+  const options = liveQueryCollectionOptions(config as any)
+
+  if (config.utils) {
+    // Merge the built-in live-query utils into the user's utils object in
+    // place so `liveQuery.utils === config.utils` (reference identity).
+    // createCollection will then idempotently attach the base tracked-source
+    // helpers on top — the query-local variants installed above win because
+    // the attach is a "only set if missing" check.
+    Object.assign(config.utils, options.utils)
+    options.utils = config.utils as unknown as LiveQueryBuiltInUtils
+  }
+
+  return bridgeToCreateCollection(options) as CollectionForContext<
+    TContext,
+    TResult
+  > & { utils: LiveQueryCollectionUtils<TUtils> }
 }
 
 /**
  * Bridge function that handles the type compatibility between query2's TResult
  * and core collection's output type without exposing ugly type assertions to users
  */
-function bridgeToCreateCollection<
-  TResult extends object,
-  TCollectionUtils extends CollectionUtils,
->(
-  options: Omit<CollectionConfig<TResult>, `utils`> & {
-    utils: TCollectionUtils
-  },
-): Collection<TResult, string | number, TCollectionUtils> {
-  const collection = new CollectionImpl(options as any)
-  collection.utils = options.utils
+function bridgeToCreateCollection<TResult extends object>(
+  options: CollectionConfig<TResult> & { utils: LiveQueryBuiltInUtils },
+): Collection<TResult, string | number, LiveQueryBuiltInUtils> {
+  const collection = createCollection(options as any) as unknown as Collection<
+    TResult,
+    string | number,
+    LiveQueryBuiltInUtils
+  >
 
   const builder = getBuilderFromConfig(options)
   if (builder) {
     registerCollectionBuilder(collection, builder)
   }
 
-  return collection as unknown as Collection<
-    TResult,
-    string | number,
-    TCollectionUtils
-  >
+  return collection
 }

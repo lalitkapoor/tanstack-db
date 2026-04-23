@@ -53,12 +53,39 @@ export class CollectionSubscriber<
   private orderedLoadSubsetResult?: (result: Promise<void> | true) => void
   private pendingOrderedLoadPromise: Promise<void> | undefined
 
+  // Listeners for net membership changes in this subscriber's tracked-key set
+  // (i.e. changes in `sentToD2Keys`). The per-live-query aggregator subscribes
+  // to these so it can fold contributions across aliases.
+  private readonly trackedKeysListeners = new Set<
+    (change: {
+      added: Array<string | number>
+      removed: Array<string | number>
+    }) => void
+  >()
+
   constructor(
     private alias: string,
     private collectionId: string,
     private collection: Collection,
     private collectionConfigBuilder: CollectionConfigBuilder<TContext, TResult>,
   ) {}
+
+  /**
+   * Listen for net membership changes in this subscriber's tracked-key set.
+   * Deltas reflect only transitions of `sentToD2Keys`, not raw D2 traffic —
+   * a stable-membership update emits nothing.
+   */
+  onTrackedKeysChange(
+    listener: (change: {
+      added: Array<string | number>
+      removed: Array<string | number>
+    }) => void,
+  ): () => void {
+    this.trackedKeysListeners.add(listener)
+    return () => {
+      this.trackedKeysListeners.delete(listener)
+    }
+  }
 
   subscribe(): CollectionSubscription {
     const whereClause = this.getWhereClauseForAlias()
@@ -163,10 +190,6 @@ export class CollectionSubscriber<
       changesArray,
       this.sentToD2Keys,
     )
-    const trackedSourceRecordChanges = this.getTrackedSourceRecordChanges(
-      previousSentKeys,
-      filteredChanges,
-    )
 
     // currentSyncState and input are always defined when this method is called
     // (only called from active subscriptions during a sync session)
@@ -177,10 +200,7 @@ export class CollectionSubscriber<
       filteredChanges,
       this.collection.config.getKey,
     )
-    this.collectionConfigBuilder.applyTrackedSourceRecordChanges(
-      this.collectionId,
-      trackedSourceRecordChanges,
-    )
+    this.emitTrackedKeyDelta(previousSentKeys, filteredChanges)
 
     // Do not provide the callback that loads more data
     // if there's no more data to load
@@ -480,40 +500,40 @@ export class CollectionSubscriber<
     )
   }
 
-  private getTrackedSourceRecordChanges(
+  /**
+   * Compute the net transitions of `sentToD2Keys` (before vs after
+   * `filterDuplicateInserts`) and notify listeners. A stable-membership
+   * ordered update — where `splitUpdates` emits delete+insert for the same
+   * key — emits nothing because the key's membership didn't actually change.
+   */
+  private emitTrackedKeyDelta(
     previousSentKeys: ReadonlySet<string | number>,
-    changes: Array<ChangeMessage<any, string | number>>,
-  ): {
-    added: Array<string | number>
-    removed: Array<string | number>
-  } {
-    const touchedKeys = new Set(changes.map((change) => change.key))
+    changes: ReadonlyArray<ChangeMessage<any, string | number>>,
+  ): void {
+    if (this.trackedKeysListeners.size === 0) return
+
+    const touched = new Set<string | number>()
+    for (const change of changes) touched.add(change.key)
+
     const added: Array<string | number> = []
     const removed: Array<string | number> = []
-
-    for (const key of touchedKeys) {
+    for (const key of touched) {
       const wasTracked = previousSentKeys.has(key)
       const isTracked = this.sentToD2Keys.has(key)
-
-      if (!wasTracked && isTracked) {
-        added.push(key)
-      } else if (wasTracked && !isTracked) {
-        removed.push(key)
-      }
+      if (!wasTracked && isTracked) added.push(key)
+      else if (wasTracked && !isTracked) removed.push(key)
     }
 
-    return { added, removed }
+    if (added.length === 0 && removed.length === 0) return
+    const delta = { added, removed }
+    for (const listener of this.trackedKeysListeners) listener(delta)
   }
 
   private clearTrackedSourceKeys() {
-    if (this.sentToD2Keys.size === 0) {
-      return
-    }
-
-    this.collectionConfigBuilder.clearTrackedSourceRecordsForCollection(
-      this.collectionId,
-      this.sentToD2Keys,
-    )
+    if (this.sentToD2Keys.size === 0) return
+    const removed = Array.from(this.sentToD2Keys)
     this.sentToD2Keys.clear()
+    const delta = { added: [] as Array<string | number>, removed }
+    for (const listener of this.trackedKeysListeners) listener(delta)
   }
 }

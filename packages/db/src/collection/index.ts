@@ -4,10 +4,7 @@ import {
   CollectionRequiresSyncConfigError,
 } from '../errors'
 import { currentStateAsChanges } from './change-events'
-import {
-  getTrackedSourceRecords,
-  subscribeTrackedSourceRecords,
-} from './tracked-source-records.js'
+import { TrackedSourceRecordsManager } from './tracked-source-records.js'
 
 import { CollectionStateManager } from './state'
 import { CollectionChangesManager } from './changes'
@@ -68,15 +65,29 @@ export interface Collection<
   readonly singleResult?: true
 }
 
-function installBaseTrackedSourceCollectionUtils(
+/**
+ * Attach tracked-source-record helpers to a utils object, wiring them to the
+ * collection's manager. Mutates `utils` in place so callers can preserve
+ * reference identity (e.g. user-supplied class instances).
+ *
+ * Idempotent: if a helper is already present on `utils` (e.g. a live query
+ * installed a query-local variant via `liveQueryCollectionOptions`), it is
+ * left alone.
+ */
+function attachTrackedSourceUtils(
   collection: CollectionImpl<any, any, any, any, any>,
   utils: UtilsRecord,
-): asserts utils is CollectionUtils<UtilsRecord> {
-  utils.getTrackedSourceRecords = () => getTrackedSourceRecords(collection)
-  utils.subscribeTrackedSourceRecords = (
-    callback: (changes: TrackedSourceRecordsChange) => void,
-    trackingOptions?: SubscribeTrackedSourceRecordsOptions,
-  ) => subscribeTrackedSourceRecords(collection, callback, trackingOptions)
+): void {
+  if (typeof utils.getTrackedSourceRecords !== `function`) {
+    utils.getTrackedSourceRecords = () =>
+      collection._trackedSourceRecords.get()
+  }
+  if (typeof utils.subscribeTrackedSourceRecords !== `function`) {
+    utils.subscribeTrackedSourceRecords = (
+      callback: (change: TrackedSourceRecordsChange) => void,
+      options?: SubscribeTrackedSourceRecordsOptions,
+    ) => collection._trackedSourceRecords.subscribe(callback, options)
+  }
 }
 
 /**
@@ -276,10 +287,8 @@ export function createCollection(
     options,
   )
   const utils = options.utils ?? {}
-
-  installBaseTrackedSourceCollectionUtils(collection, utils)
-  collection.utils = utils
-
+  attachTrackedSourceUtils(collection, utils)
+  collection.utils = utils as CollectionUtils<UtilsRecord>
   return collection
 }
 
@@ -313,6 +322,10 @@ export class CollectionImpl<
   // The core state of the collection is "public" so that is accessible in tests
   // and for debugging
   public _state: CollectionStateManager<TOutput, TKey, TSchema, TInput>
+  // Aggregated view of source-records currently being used by active live
+  // queries that depend on this collection. Public so live-query aggregators
+  // can push deltas in.
+  public _trackedSourceRecords: TrackedSourceRecordsManager<TKey>
 
   /**
    * When set, collection consumers should defer processing incoming data
@@ -368,6 +381,7 @@ export class CollectionImpl<
     this._mutations = new CollectionMutationsManager(config, this.id)
     this._state = new CollectionStateManager(config)
     this._sync = new CollectionSyncManager(config, this.id)
+    this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 

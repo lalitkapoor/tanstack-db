@@ -1,7 +1,6 @@
 import { D2, output, serializeValue } from '@tanstack/db-ivm'
 import { INCLUDES_ROUTING, compileQuery } from '../compiler/index.js'
 import { createCollection } from '../../collection/index.js'
-import { applyTrackedSourceRecordChanges as applyTrackedSourceRecordChangesToCollection } from '../../collection/tracked-source-records.js'
 import {
   MissingAliasInputsError,
   SetWindowRequiresOrderByError,
@@ -11,6 +10,7 @@ import { getActiveTransaction } from '../../transactions.js'
 import { CollectionSubscriber } from './collection-subscriber.js'
 import { getCollectionBuilder } from './collection-registry.js'
 import { LIVE_QUERY_INTERNAL } from './internal.js'
+import { LiveQueryTrackedSourceRecordsAggregator } from './tracked-source-records-aggregator.js'
 import {
   buildQueryFromConfig,
   extractCollectionAliases,
@@ -146,8 +146,12 @@ export class CollectionConfigBuilder<
     SchedulerContextId,
     PendingGraphRun
   >()
+
+  // Long-lived listeners for the live-query's tracked-source-records view.
+  // Survives sync sessions: we attach subscribers here, and each sync session
+  // hooks its aggregator up to forward events to this list.
   private readonly trackedSourceRecordListeners = new Set<
-    (changes: TrackedSourceRecordsChange) => void
+    (change: TrackedSourceRecordsChange) => void
   >()
 
   // Unsubscribe function for scheduler's onClear listener
@@ -591,12 +595,14 @@ export class CollectionConfigBuilder<
     return this.runCount
   }
 
+  /**
+   * Source records from the query's source collections that this live query
+   * is currently using. Delegates to the sync session's aggregator; returns
+   * `[]` when there's no active sync session or the live query has no
+   * subscribers.
+   */
   getTrackedSourceRecords(): Array<TrackedSourceRecord> {
-    if (!this.shouldExposeTrackedSourceRecords()) {
-      return []
-    }
-
-    return this.getTrackedSourceRecordsSnapshot()
+    return this.currentSyncState?.trackedSourceRecordsAggregator.snapshot() ?? []
   }
 
   subscribeTrackedSourceRecords(
@@ -607,148 +613,12 @@ export class CollectionConfigBuilder<
 
     if (options?.includeInitialState) {
       const added = this.getTrackedSourceRecords()
-      if (added.length > 0) {
-        callback({ added, removed: [] })
-      }
+      if (added.length > 0) callback({ added, removed: [] })
     }
 
     return () => {
       this.trackedSourceRecordListeners.delete(callback)
     }
-  }
-
-  applyTrackedSourceRecordChanges(
-    collectionId: string,
-    changes: {
-      added: Iterable<string | number>
-      removed: Iterable<string | number>
-    },
-  ) {
-    const trackedSourceRecords = this.currentSyncState?.trackedSourceRecords
-    if (!trackedSourceRecords) {
-      return
-    }
-
-    const added: Array<TrackedSourceRecord> = []
-    const removed: Array<TrackedSourceRecord> = []
-
-    for (const key of changes.added) {
-      const record = { collectionId, key }
-      const serializedRecord = this.serializeTrackedSourceRecord(record)
-      const existing = trackedSourceRecords.get(serializedRecord)
-
-      if (existing) {
-        existing.refCount++
-      } else {
-        trackedSourceRecords.set(serializedRecord, {
-          record,
-          refCount: 1,
-        })
-        added.push(record)
-      }
-    }
-
-    for (const key of changes.removed) {
-      const record = { collectionId, key }
-      const serializedRecord = this.serializeTrackedSourceRecord(record)
-      const existing = trackedSourceRecords.get(serializedRecord)
-      if (!existing) {
-        continue
-      }
-
-      if (existing.refCount === 1) {
-        trackedSourceRecords.delete(serializedRecord)
-        removed.push(existing.record)
-      } else {
-        existing.refCount--
-      }
-    }
-
-    this.emitTrackedSourceRecordChanges({ added, removed })
-  }
-
-  clearTrackedSourceRecordsForCollection(
-    collectionId: string,
-    keys: Iterable<string | number>,
-  ) {
-    this.applyTrackedSourceRecordChanges(collectionId, {
-      added: [],
-      removed: keys,
-    })
-  }
-
-  private emitTrackedSourceRecordChanges(
-    changes: TrackedSourceRecordsChange,
-    force = false,
-  ) {
-    if (changes.added.length === 0 && changes.removed.length === 0) {
-      return
-    }
-
-    if (!force && !this.shouldExposeTrackedSourceRecords()) {
-      return
-    }
-
-    if (this.currentSyncState) {
-      this.currentSyncState.hasExposedTrackedSourceRecords = true
-    }
-    this.applyTrackedSourceRecordChangesToSourceCollections(changes)
-
-    for (const listener of this.trackedSourceRecordListeners) {
-      listener(changes)
-    }
-  }
-
-  private applyTrackedSourceRecordChangesToSourceCollections(
-    changes: TrackedSourceRecordsChange,
-  ) {
-    const keysByCollectionId = new Map<
-      string,
-      { added: Array<string | number>; removed: Array<string | number> }
-    >()
-
-    for (const record of changes.added) {
-      const entry = keysByCollectionId.get(record.collectionId) ?? {
-        added: [],
-        removed: [],
-      }
-      entry.added.push(record.key)
-      keysByCollectionId.set(record.collectionId, entry)
-    }
-
-    for (const record of changes.removed) {
-      const entry = keysByCollectionId.get(record.collectionId) ?? {
-        added: [],
-        removed: [],
-      }
-      entry.removed.push(record.key)
-      keysByCollectionId.set(record.collectionId, entry)
-    }
-
-    for (const [collectionId, collectionChanges] of keysByCollectionId) {
-      const collection = this.collections[collectionId]
-
-      if (!collection) {
-        continue
-      }
-
-      applyTrackedSourceRecordChangesToCollection(collection, collectionChanges)
-    }
-  }
-
-  private getTrackedSourceRecordsSnapshot(): Array<TrackedSourceRecord> {
-    return Array.from(
-      this.currentSyncState?.trackedSourceRecords.values() ?? [],
-      ({ record }) => record,
-    )
-  }
-
-  private shouldExposeTrackedSourceRecords(): boolean {
-    return (this.liveQueryCollection?.subscriberCount ?? 0) > 0
-  }
-
-  private serializeTrackedSourceRecord(record: TrackedSourceRecord): string {
-    return serializeValue([record.collectionId, record.key])
   }
 
   private syncFn(config: SyncMethods<TResult>) {
@@ -757,13 +627,23 @@ export class CollectionConfigBuilder<
     // Store config and syncState as instance properties for the duration of this sync session
     this.currentSyncConfig = config
 
+    const trackedSourceRecordsAggregator =
+      new LiveQueryTrackedSourceRecordsAggregator(this.collections)
     const syncState: SyncState = {
       messagesCount: 0,
       subscribedToAllCollections: false,
       unsubscribeCallbacks: new Set<() => void>(),
-      trackedSourceRecords: new Map(),
-      hasExposedTrackedSourceRecords: false,
+      trackedSourceRecordsAggregator,
     }
+
+    // Forward aggregator deltas to the builder's long-lived listeners. The
+    // aggregator itself is session-scoped; when sync stops, this subscription
+    // dies with it (unsubscribed via unsubscribeCallbacks below).
+    syncState.unsubscribeCallbacks.add(
+      trackedSourceRecordsAggregator.subscribe((change) => {
+        for (const listener of this.trackedSourceRecordListeners) listener(change)
+      }),
+    )
 
     // Extend the pipeline such that it applies the incoming changes to the collection
     const fullSyncState = this.extendPipelineWithChangeProcessing(
@@ -795,32 +675,13 @@ export class CollectionConfigBuilder<
     )
     syncState.unsubscribeCallbacks.add(loadingSubsetUnsubscribe)
 
+    // Expose tracked source records only while the live query has active
+    // subscribers. The aggregator replays snapshot-as-added on 0→1 and
+    // snapshot-as-removed on 1→0.
     const trackedSubscribersUnsubscribe = config.collection.on(
       `subscribers:change`,
       (event) => {
-        if (event.previousSubscriberCount === 0 && event.subscriberCount > 0) {
-          if (!fullSyncState.hasExposedTrackedSourceRecords) {
-            this.emitTrackedSourceRecordChanges(
-              {
-                added: this.getTrackedSourceRecordsSnapshot(),
-                removed: [],
-              },
-              true,
-            )
-          }
-        } else if (
-          event.previousSubscriberCount > 0 &&
-          event.subscriberCount === 0
-        ) {
-          this.emitTrackedSourceRecordChanges(
-            {
-              added: [],
-              removed: this.getTrackedSourceRecordsSnapshot(),
-            },
-            true,
-          )
-          fullSyncState.hasExposedTrackedSourceRecords = false
-        }
+        trackedSourceRecordsAggregator.setExposed(event.subscriberCount > 0)
       },
     )
     syncState.unsubscribeCallbacks.add(trackedSubscribersUnsubscribe)
@@ -1272,6 +1133,19 @@ export class CollectionConfigBuilder<
         collectionId,
         collection,
         this,
+      )
+
+      // Forward net membership changes from this subscriber into the
+      // per-live-query aggregator. One subscription per alias — self-joins
+      // will emit independently and the aggregator dedupes.
+      syncState.unsubscribeCallbacks.add(
+        collectionSubscriber.onTrackedKeysChange(({ added, removed }) => {
+          syncState.trackedSourceRecordsAggregator.apply(
+            collectionId,
+            added,
+            removed,
+          )
+        }),
       )
 
       // Subscribe to status changes for status flow
