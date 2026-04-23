@@ -158,9 +158,14 @@ export class CollectionSubscriber<
     callback?: () => boolean,
   ) {
     const changesArray = Array.isArray(changes) ? changes : [...changes]
+    const previousSentKeys = new Set(this.sentToD2Keys)
     const filteredChanges = filterDuplicateInserts(
       changesArray,
       this.sentToD2Keys,
+    )
+    const trackedSourceRecordChanges = this.getTrackedSourceRecordChanges(
+      previousSentKeys,
+      filteredChanges,
     )
 
     // currentSyncState and input are always defined when this method is called
@@ -174,7 +179,7 @@ export class CollectionSubscriber<
     )
     this.collectionConfigBuilder.applyTrackedSourceRecordChanges(
       this.collectionId,
-      filteredChanges,
+      trackedSourceRecordChanges,
     )
 
     // Do not provide the callback that loads more data
@@ -290,7 +295,6 @@ export class CollectionSubscriber<
       this.biggest = undefined
       this.lastLoadRequestKey = undefined
       this.pendingOrderedLoadPromise = undefined
-      this.clearTrackedSourceKeys()
     })
 
     // Clean up truncate listener when subscription is unsubscribed
@@ -474,6 +478,31 @@ export class CollectionSubscriber<
     this.collectionConfigBuilder.liveQueryCollection!._sync.trackLoadPromise(
       promise,
     )
+  }
+
+  private getTrackedSourceRecordChanges(
+    previousSentKeys: ReadonlySet<string | number>,
+    changes: Array<ChangeMessage<any, string | number>>,
+  ): {
+    added: Array<string | number>
+    removed: Array<string | number>
+  } {
+    const touchedKeys = new Set(changes.map((change) => change.key))
+    const added: Array<string | number> = []
+    const removed: Array<string | number> = []
+
+    for (const key of touchedKeys) {
+      const wasTracked = previousSentKeys.has(key)
+      const isTracked = this.sentToD2Keys.has(key)
+
+      if (!wasTracked && isTracked) {
+        added.push(key)
+      } else if (wasTracked && !isTracked) {
+        removed.push(key)
+      }
+    }
+
+    return { added, removed }
   }
 
   private clearTrackedSourceKeys() {

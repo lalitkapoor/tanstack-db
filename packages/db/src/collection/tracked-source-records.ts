@@ -1,3 +1,4 @@
+import { serializeValue } from '@tanstack/db-ivm'
 import type { Collection } from './index.js'
 import type {
   SubscribeTrackedSourceRecordsOptions,
@@ -113,7 +114,7 @@ class CollectionTrackedSourceRecordsManager<
   }
 
   private serializeKey(key: TKey): string {
-    return JSON.stringify(key)
+    return serializeValue(key)
   }
 }
 

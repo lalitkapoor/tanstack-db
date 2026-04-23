@@ -3,6 +3,7 @@ import type {
   CollectionConfig,
   ResultStream,
   StringCollationConfig,
+  TrackedSourceRecord,
 } from '../../types.js'
 import type { InitialQueryBuilder, QueryBuilder } from '../builder/index.js'
 import type {
@@ -22,6 +23,14 @@ export type SyncState = {
   messagesCount: number
   subscribedToAllCollections: boolean
   unsubscribeCallbacks: Set<() => void>
+  trackedSourceRecords: Map<
+    string,
+    {
+      record: TrackedSourceRecord
+      refCount: number
+    }
+  >
+  hasExposedTrackedSourceRecords: boolean
 
   graph?: D2
   inputs?: Record<string, RootStreamBuilder<unknown>>

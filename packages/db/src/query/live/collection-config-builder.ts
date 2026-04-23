@@ -79,11 +79,6 @@ type PendingGraphRun = {
   loadCallbacks: Set<() => boolean>
 }
 
-type TrackedSourceRecordEntry = {
-  record: TrackedSourceRecord
-  refCount: number
-}
-
 // Global counter for auto-generated collection IDs
 let liveQueryCollectionCounter = 0
 
@@ -149,15 +144,9 @@ export class CollectionConfigBuilder<
     SchedulerContextId,
     PendingGraphRun
   >()
-
-  private readonly trackedSourceRecords = new Map<
-    string,
-    TrackedSourceRecordEntry
-  >()
   private readonly trackedSourceRecordListeners = new Set<
     (changes: TrackedSourceRecordsChange) => void
   >()
-  private hasExposedTrackedSourceRecords = false
 
   // Unsubscribe function for scheduler's onClear listener
   // Registered when sync starts, unregistered when sync stops
@@ -628,42 +617,48 @@ export class CollectionConfigBuilder<
 
   applyTrackedSourceRecordChanges(
     collectionId: string,
-    changes: Iterable<
-      Pick<ChangeMessage<object, string | number>, `type` | `key`>
-    >,
+    changes: {
+      added: Iterable<string | number>
+      removed: Iterable<string | number>
+    },
   ) {
+    const trackedSourceRecords = this.currentSyncState?.trackedSourceRecords
+    if (!trackedSourceRecords) {
+      return
+    }
+
     const added: Array<TrackedSourceRecord> = []
     const removed: Array<TrackedSourceRecord> = []
 
-    for (const change of changes) {
-      if (change.type === `insert`) {
-        const record = { collectionId, key: change.key }
-        const serializedRecord = this.serializeTrackedSourceRecord(record)
-        const existing = this.trackedSourceRecords.get(serializedRecord)
+    for (const key of changes.added) {
+      const record = { collectionId, key }
+      const serializedRecord = this.serializeTrackedSourceRecord(record)
+      const existing = trackedSourceRecords.get(serializedRecord)
 
-        if (existing) {
-          existing.refCount++
-        } else {
-          this.trackedSourceRecords.set(serializedRecord, {
-            record,
-            refCount: 1,
-          })
-          added.push(record)
-        }
-      } else if (change.type === `delete`) {
-        const record = { collectionId, key: change.key }
-        const serializedRecord = this.serializeTrackedSourceRecord(record)
-        const existing = this.trackedSourceRecords.get(serializedRecord)
-        if (!existing) {
-          continue
-        }
+      if (existing) {
+        existing.refCount++
+      } else {
+        trackedSourceRecords.set(serializedRecord, {
+          record,
+          refCount: 1,
+        })
+        added.push(record)
+      }
+    }
 
-        if (existing.refCount === 1) {
-          this.trackedSourceRecords.delete(serializedRecord)
-          removed.push(existing.record)
-        } else {
-          existing.refCount--
-        }
+    for (const key of changes.removed) {
+      const record = { collectionId, key }
+      const serializedRecord = this.serializeTrackedSourceRecord(record)
+      const existing = trackedSourceRecords.get(serializedRecord)
+      if (!existing) {
+        continue
+      }
+
+      if (existing.refCount === 1) {
+        trackedSourceRecords.delete(serializedRecord)
+        removed.push(existing.record)
+      } else {
+        existing.refCount--
       }
     }
 
@@ -676,10 +671,10 @@ export class CollectionConfigBuilder<
   ) {
     this.applyTrackedSourceRecordChanges(
       collectionId,
-      Array.from(keys, (key) => ({
-        type: `delete` as const,
-        key,
-      })),
+      {
+        added: [],
+        removed: keys,
+      },
     )
   }
 
@@ -695,7 +690,9 @@ export class CollectionConfigBuilder<
       return
     }
 
-    this.hasExposedTrackedSourceRecords = true
+    if (this.currentSyncState) {
+      this.currentSyncState.hasExposedTrackedSourceRecords = true
+    }
     this.applyTrackedSourceRecordChangesToSourceCollections(changes)
 
     for (const listener of this.trackedSourceRecordListeners) {
@@ -742,7 +739,7 @@ export class CollectionConfigBuilder<
 
   private getTrackedSourceRecordsSnapshot(): Array<TrackedSourceRecord> {
     return Array.from(
-      this.trackedSourceRecords.values(),
+      this.currentSyncState?.trackedSourceRecords.values() ?? [],
       ({ record }) => record,
     )
   }
@@ -765,6 +762,8 @@ export class CollectionConfigBuilder<
       messagesCount: 0,
       subscribedToAllCollections: false,
       unsubscribeCallbacks: new Set<() => void>(),
+      trackedSourceRecords: new Map(),
+      hasExposedTrackedSourceRecords: false,
     }
 
     // Extend the pipeline such that it applies the incoming changes to the collection
@@ -804,7 +803,7 @@ export class CollectionConfigBuilder<
           event.previousSubscriberCount === 0 &&
           event.subscriberCount > 0
         ) {
-          if (!this.hasExposedTrackedSourceRecords) {
+          if (!fullSyncState.hasExposedTrackedSourceRecords) {
             this.emitTrackedSourceRecordChanges(
               {
                 added: this.getTrackedSourceRecordsSnapshot(),
@@ -824,7 +823,7 @@ export class CollectionConfigBuilder<
             },
             true,
           )
-          this.hasExposedTrackedSourceRecords = false
+          fullSyncState.hasExposedTrackedSourceRecords = false
         }
       },
     )
