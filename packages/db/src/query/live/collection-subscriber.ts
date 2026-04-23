@@ -53,15 +53,17 @@ export class CollectionSubscriber<
   private orderedLoadSubsetResult?: (result: Promise<void> | true) => void
   private pendingOrderedLoadPromise: Promise<void> | undefined
 
-  // Listeners for net membership changes in this subscriber's tracked-key set
-  // (i.e. changes in `sentToD2Keys`). The per-live-query aggregator subscribes
-  // to these so it can fold contributions across aliases.
-  private readonly trackedKeysListeners = new Set<
-    (change: {
-      added: Array<string | number>
-      removed: Array<string | number>
-    }) => void
-  >()
+  /**
+   * Callback invoked with net membership changes in this subscriber's
+   * tracked-key set (i.e. transitions of `sentToD2Keys`). The builder wires
+   * this to the per-live-query aggregator. A stable-membership ordered
+   * update — where split delete+insert leaves `sentToD2Keys` unchanged —
+   * emits nothing.
+   */
+  public onTrackedKeysChange?: (change: {
+    added: Array<string | number>
+    removed: Array<string | number>
+  }) => void
 
   constructor(
     private alias: string,
@@ -69,23 +71,6 @@ export class CollectionSubscriber<
     private collection: Collection,
     private collectionConfigBuilder: CollectionConfigBuilder<TContext, TResult>,
   ) {}
-
-  /**
-   * Listen for net membership changes in this subscriber's tracked-key set.
-   * Deltas reflect only transitions of `sentToD2Keys`, not raw D2 traffic —
-   * a stable-membership update emits nothing.
-   */
-  onTrackedKeysChange(
-    listener: (change: {
-      added: Array<string | number>
-      removed: Array<string | number>
-    }) => void,
-  ): () => void {
-    this.trackedKeysListeners.add(listener)
-    return () => {
-      this.trackedKeysListeners.delete(listener)
-    }
-  }
 
   subscribe(): CollectionSubscription {
     const whereClause = this.getWhereClauseForAlias()
@@ -502,7 +487,7 @@ export class CollectionSubscriber<
 
   /**
    * Compute the net transitions of `sentToD2Keys` (before vs after
-   * `filterDuplicateInserts`) and notify listeners. A stable-membership
+   * `filterDuplicateInserts`) and notify the callback. A stable-membership
    * ordered update — where `splitUpdates` emits delete+insert for the same
    * key — emits nothing because the key's membership didn't actually change.
    */
@@ -510,7 +495,7 @@ export class CollectionSubscriber<
     previousSentKeys: ReadonlySet<string | number>,
     changes: ReadonlyArray<ChangeMessage<any, string | number>>,
   ): void {
-    if (this.trackedKeysListeners.size === 0) return
+    if (!this.onTrackedKeysChange) return
 
     const touched = new Set<string | number>()
     for (const change of changes) touched.add(change.key)
@@ -525,15 +510,13 @@ export class CollectionSubscriber<
     }
 
     if (added.length === 0 && removed.length === 0) return
-    const delta = { added, removed }
-    for (const listener of this.trackedKeysListeners) listener(delta)
+    this.onTrackedKeysChange({ added, removed })
   }
 
   private clearTrackedSourceKeys() {
     if (this.sentToD2Keys.size === 0) return
     const removed = Array.from(this.sentToD2Keys)
     this.sentToD2Keys.clear()
-    const delta = { added: [] as Array<string | number>, removed }
-    for (const listener of this.trackedKeysListeners) listener(delta)
+    this.onTrackedKeysChange?.({ added: [], removed })
   }
 }

@@ -627,23 +627,24 @@ export class CollectionConfigBuilder<
     // Store config and syncState as instance properties for the duration of this sync session
     this.currentSyncConfig = config
 
+    // Session-scoped aggregator that dedupes tracked source records across
+    // aliases and fans net transitions out to (a) the builder's long-lived
+    // listeners and (b) each source collection's tracked-source manager.
     const trackedSourceRecordsAggregator =
-      new LiveQueryTrackedSourceRecordsAggregator(this.collections)
+      new LiveQueryTrackedSourceRecordsAggregator(
+        this.collections,
+        (change) => {
+          for (const listener of this.trackedSourceRecordListeners) {
+            listener(change)
+          }
+        },
+      )
     const syncState: SyncState = {
       messagesCount: 0,
       subscribedToAllCollections: false,
       unsubscribeCallbacks: new Set<() => void>(),
       trackedSourceRecordsAggregator,
     }
-
-    // Forward aggregator deltas to the builder's long-lived listeners. The
-    // aggregator itself is session-scoped; when sync stops, this subscription
-    // dies with it (unsubscribed via unsubscribeCallbacks below).
-    syncState.unsubscribeCallbacks.add(
-      trackedSourceRecordsAggregator.subscribe((change) => {
-        for (const listener of this.trackedSourceRecordListeners) listener(change)
-      }),
-    )
 
     // Extend the pipeline such that it applies the incoming changes to the collection
     const fullSyncState = this.extendPipelineWithChangeProcessing(
@@ -1136,17 +1137,16 @@ export class CollectionConfigBuilder<
       )
 
       // Forward net membership changes from this subscriber into the
-      // per-live-query aggregator. One subscription per alias — self-joins
-      // will emit independently and the aggregator dedupes.
-      syncState.unsubscribeCallbacks.add(
-        collectionSubscriber.onTrackedKeysChange(({ added, removed }) => {
-          syncState.trackedSourceRecordsAggregator.apply(
-            collectionId,
-            added,
-            removed,
-          )
-        }),
-      )
+      // per-live-query aggregator. One subscriber per alias — self-joins
+      // emit independently and the aggregator dedupes. Direct assignment
+      // (not a listener list) since this is 1:1.
+      collectionSubscriber.onTrackedKeysChange = ({ added, removed }) => {
+        syncState.trackedSourceRecordsAggregator.apply(
+          collectionId,
+          added,
+          removed,
+        )
+      }
 
       // Subscribe to status changes for status flow
       const statusUnsubscribe = collection.on(`status:change`, (event) => {

@@ -1,52 +1,83 @@
 import { serializeValue } from '@tanstack/db-ivm'
-import { RefCountedKeyedSet } from './ref-counted-keyed-set.js'
 import type {
 	SubscribeTrackedSourceRecordsOptions,
 	TrackedSourceRecord,
 	TrackedSourceRecordsChange,
 } from '../types.js'
 
+type Entry<TKey> = { key: TKey; refCount: number }
+
 /**
  * Per-base-collection tracked source records manager.
  *
  * Refcounts over active live queries that depend on this collection. Each
- * live query's `LiveQueryTrackedSourceRecordsAggregator` pushes its net
- * alias-level transitions here; this manager dedupes across queries and
- * emits to subscribers only on true 0↔1 transitions.
+ * live query's aggregator pushes its net alias-level transitions here; this
+ * manager dedupes across queries and emits to subscribers only on true 0↔1
+ * transitions.
  *
- * Lives as a real field on `CollectionImpl` — not a WeakMap lookup, not
- * utils-injection.
+ * Lives as a real field on CollectionImpl — no WeakMap lookup, no
+ * utils-injection side-channel.
  */
 export class TrackedSourceRecordsManager<
 	TKey extends string | number = string | number,
 > {
-	private readonly set = new RefCountedKeyedSet<TKey>((key) =>
-		serializeValue(key),
-	)
+	private readonly entries = new Map<string, Entry<TKey>>()
+	private readonly listeners = new Set<
+		(change: TrackedSourceRecordsChange) => void
+	>()
 
 	constructor(private readonly collectionId: string) {}
 
 	apply(added: Iterable<TKey>, removed: Iterable<TKey>): void {
-		this.set.apply(added, removed)
+		const netAdded: Array<TKey> = []
+		const netRemoved: Array<TKey> = []
+
+		for (const key of added) {
+			const serialized = serializeValue(key)
+			const existing = this.entries.get(serialized)
+			if (existing) {
+				existing.refCount++
+			} else {
+				this.entries.set(serialized, { key, refCount: 1 })
+				netAdded.push(key)
+			}
+		}
+
+		for (const key of removed) {
+			const serialized = serializeValue(key)
+			const existing = this.entries.get(serialized)
+			if (!existing) continue
+			if (existing.refCount === 1) {
+				this.entries.delete(serialized)
+				netRemoved.push(existing.key)
+			} else {
+				existing.refCount--
+			}
+		}
+
+		if (netAdded.length === 0 && netRemoved.length === 0) return
+		const change: TrackedSourceRecordsChange = {
+			added: netAdded.map((key) => this.toRecord(key)),
+			removed: netRemoved.map((key) => this.toRecord(key)),
+		}
+		for (const listener of this.listeners) listener(change)
 	}
 
 	get(): Array<TrackedSourceRecord> {
-		return this.set.snapshot().map((key) => this.toRecord(key))
+		return Array.from(this.entries.values(), ({ key }) => this.toRecord(key))
 	}
 
 	subscribe(
-		callback: (changes: TrackedSourceRecordsChange) => void,
+		callback: (change: TrackedSourceRecordsChange) => void,
 		options?: SubscribeTrackedSourceRecordsOptions,
 	): () => void {
-		return this.set.subscribe(
-			({ added, removed }) => {
-				callback({
-					added: added.map((key) => this.toRecord(key)),
-					removed: removed.map((key) => this.toRecord(key)),
-				})
-			},
-			options,
-		)
+		this.listeners.add(callback)
+		if (options?.includeInitialState && this.entries.size > 0) {
+			callback({ added: this.get(), removed: [] })
+		}
+		return () => {
+			this.listeners.delete(callback)
+		}
 	}
 
 	private toRecord(key: TKey): TrackedSourceRecord {

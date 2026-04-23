@@ -1,11 +1,15 @@
 import { serializeValue } from '@tanstack/db-ivm'
-import { RefCountedKeyedSet } from '../../collection/ref-counted-keyed-set.js'
 import type { Collection } from '../../collection/index.js'
 import type {
-	SubscribeTrackedSourceRecordsOptions,
 	TrackedSourceRecord,
 	TrackedSourceRecordsChange,
 } from '../../types.js'
+
+type Entry = {
+	collectionId: string
+	key: string | number
+	refCount: number
+}
 
 /**
  * Per-live-query aggregator for tracked source records.
@@ -15,19 +19,13 @@ import type {
  * multiple aliases, so the same (collectionId, key) pair can be added
  * multiple times).
  *
- * `exposed` controls whether state transitions are visible to external
- * listeners and propagated to source-collection managers. A live query
- * only exposes its tracked records while it has subscribers; flipping
- * `exposed` emits the current snapshot as added/removed so downstream
- * views stay consistent.
+ * `exposed` gates whether net 0↔1 transitions are visible to the outside:
+ * we only propagate to source collections and call `onChange` while the
+ * live query has subscribers. Flipping `exposed` replays the current
+ * snapshot as added/removed so downstream views stay consistent.
  */
 export class LiveQueryTrackedSourceRecordsAggregator {
-	private readonly set = new RefCountedKeyedSet<TrackedSourceRecord>((record) =>
-		serializeValue([record.collectionId, record.key]),
-	)
-	private readonly listeners = new Set<
-		(change: TrackedSourceRecordsChange) => void
-	>()
+	private readonly entries = new Map<string, Entry>()
 	private exposed = false
 
 	constructor(
@@ -35,99 +33,96 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 			string,
 			Collection<any, any, any>
 		>,
+		private readonly onChange: (change: TrackedSourceRecordsChange) => void,
 	) {}
 
 	/**
-	 * Record a membership change from one `CollectionSubscriber`. Keys are
-	 * raw; the caller supplies the source collectionId.
+	 * Record a membership change from one `CollectionSubscriber`. All keys in
+	 * a single call share the same collectionId, so propagation to the source
+	 * collection's manager is a direct call — no grouping needed.
 	 */
 	apply(
 		collectionId: string,
 		added: Iterable<string | number>,
 		removed: Iterable<string | number>,
 	): void {
-		const addedRecords = Array.from(added, (key) => ({ collectionId, key }))
-		const removedRecords = Array.from(removed, (key) => ({
-			collectionId,
-			key,
-		}))
-		const net = this.set.apply(addedRecords, removedRecords)
+		const netAdded: Array<string | number> = []
+		const netRemoved: Array<string | number> = []
+
+		for (const key of added) {
+			const serialized = serializeValue([collectionId, key])
+			const existing = this.entries.get(serialized)
+			if (existing) {
+				existing.refCount++
+			} else {
+				this.entries.set(serialized, { collectionId, key, refCount: 1 })
+				netAdded.push(key)
+			}
+		}
+
+		for (const key of removed) {
+			const serialized = serializeValue([collectionId, key])
+			const existing = this.entries.get(serialized)
+			if (!existing) continue
+			if (existing.refCount === 1) {
+				this.entries.delete(serialized)
+				netRemoved.push(existing.key)
+			} else {
+				existing.refCount--
+			}
+		}
 
 		if (!this.exposed) return
-		this.propagate(net.added, net.removed)
-		this.emit(net)
+		if (netAdded.length === 0 && netRemoved.length === 0) return
+
+		this.sourceCollections[collectionId]?._trackedSourceRecords.apply(
+			netAdded,
+			netRemoved,
+		)
+		this.onChange({
+			added: netAdded.map((key) => ({ collectionId, key })),
+			removed: netRemoved.map((key) => ({ collectionId, key })),
+		})
 	}
 
 	setExposed(exposed: boolean): void {
 		if (this.exposed === exposed) return
 		this.exposed = exposed
+		if (this.entries.size === 0) return
 
-		const snapshot = this.set.snapshot()
-		if (snapshot.length === 0) return
+		// Group current entries by source collectionId so each source
+		// collection's manager sees its keys in one call.
+		const grouped = new Map<string, Array<string | number>>()
+		for (const entry of this.entries.values()) {
+			let bucket = grouped.get(entry.collectionId)
+			if (!bucket) {
+				bucket = []
+				grouped.set(entry.collectionId, bucket)
+			}
+			bucket.push(entry.key)
+		}
 
-		const change = exposed
-			? { added: snapshot, removed: [] as Array<TrackedSourceRecord> }
-			: { added: [] as Array<TrackedSourceRecord>, removed: snapshot }
+		const added: Array<TrackedSourceRecord> = []
+		const removed: Array<TrackedSourceRecord> = []
+		for (const [collectionId, keys] of grouped) {
+			const collection = this.sourceCollections[collectionId]
+			if (exposed) {
+				collection?._trackedSourceRecords.apply(keys, [])
+				for (const key of keys) added.push({ collectionId, key })
+			} else {
+				collection?._trackedSourceRecords.apply([], keys)
+				for (const key of keys) removed.push({ collectionId, key })
+			}
+		}
 
-		this.propagate(change.added, change.removed)
-		this.emit(change)
+		this.onChange({ added, removed })
 	}
 
 	snapshot(): Array<TrackedSourceRecord> {
-		return this.exposed ? this.set.snapshot() : []
-	}
-
-	subscribe(
-		callback: (change: TrackedSourceRecordsChange) => void,
-		options?: SubscribeTrackedSourceRecordsOptions,
-	): () => void {
-		this.listeners.add(callback)
-
-		if (options?.includeInitialState && this.exposed) {
-			const added = this.set.snapshot()
-			if (added.length > 0) callback({ added, removed: [] })
-		}
-
-		return () => {
-			this.listeners.delete(callback)
-		}
-	}
-
-	private emit(change: TrackedSourceRecordsChange): void {
-		if (change.added.length === 0 && change.removed.length === 0) return
-		for (const listener of this.listeners) listener(change)
-	}
-
-	/**
-	 * Forward the net transitions to each source collection's tracked-source
-	 * records manager. Groups by collectionId so mixed batches (during a
-	 * setExposed snapshot replay) apply per-collection in one pass.
-	 */
-	private propagate(
-		added: Array<TrackedSourceRecord>,
-		removed: Array<TrackedSourceRecord>,
-	): void {
-		if (added.length === 0 && removed.length === 0) return
-
-		const byId = new Map<
-			string,
-			{ added: Array<string | number>; removed: Array<string | number> }
-		>()
-		const bucket = (id: string) => {
-			let entry = byId.get(id)
-			if (!entry) {
-				entry = { added: [], removed: [] }
-				byId.set(id, entry)
-			}
-			return entry
-		}
-		for (const record of added) bucket(record.collectionId).added.push(record.key)
-		for (const record of removed) bucket(record.collectionId).removed.push(record.key)
-
-		for (const [collectionId, delta] of byId) {
-			const collection = this.sourceCollections[collectionId]
-			if (!collection) continue
-			collection._trackedSourceRecords.apply(delta.added, delta.removed)
-		}
+		if (!this.exposed) return []
+		return Array.from(this.entries.values(), ({ collectionId, key }) => ({
+			collectionId,
+			key,
+		}))
 	}
 }
