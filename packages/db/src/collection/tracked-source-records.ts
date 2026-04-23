@@ -1,4 +1,3 @@
-import { serializeValue } from '@tanstack/db-ivm'
 import type {
 	SubscribeTrackedSourceRecordsOptions,
 	TrackedSourceRecord,
@@ -18,7 +17,8 @@ type Entry<TKey> = { key: TKey; refCount: number }
 export class TrackedSourceRecordsManager<
 	TKey extends string | number = string | number,
 > {
-	private readonly entries = new Map<string, Entry<TKey>>()
+	// Keys are primitives; use them directly as the Map key. No serialization.
+	private readonly entries = new Map<TKey, Entry<TKey>>()
 	private readonly listeners = new Set<
 		(change: TrackedSourceRecordsChange) => void
 	>()
@@ -30,22 +30,20 @@ export class TrackedSourceRecordsManager<
 		const netRemoved: Array<TKey> = []
 
 		for (const key of added) {
-			const serialized = serializeValue(key)
-			const existing = this.entries.get(serialized)
+			const existing = this.entries.get(key)
 			if (existing) {
 				existing.refCount++
 			} else {
-				this.entries.set(serialized, { key, refCount: 1 })
+				this.entries.set(key, { key, refCount: 1 })
 				netAdded.push(key)
 			}
 		}
 
 		for (const key of removed) {
-			const serialized = serializeValue(key)
-			const existing = this.entries.get(serialized)
+			const existing = this.entries.get(key)
 			if (!existing) continue
 			if (existing.refCount === 1) {
-				this.entries.delete(serialized)
+				this.entries.delete(key)
 				netRemoved.push(existing.key)
 			} else {
 				existing.refCount--

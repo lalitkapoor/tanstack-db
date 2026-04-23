@@ -170,7 +170,6 @@ export class CollectionSubscriber<
     callback?: () => boolean,
   ) {
     const changesArray = Array.isArray(changes) ? changes : [...changes]
-    const previousSentKeys = new Set(this.sentToD2Keys)
     const filteredChanges = filterDuplicateInserts(
       changesArray,
       this.sentToD2Keys,
@@ -185,7 +184,7 @@ export class CollectionSubscriber<
       filteredChanges,
       this.collection.config.getKey,
     )
-    this.emitTrackedKeyDelta(previousSentKeys, filteredChanges)
+    this.emitTrackedKeyDelta(filteredChanges)
 
     // Do not provide the callback that loads more data
     // if there's no more data to load
@@ -486,27 +485,33 @@ export class CollectionSubscriber<
   }
 
   /**
-   * Compute the net transitions of `sentToD2Keys` (before vs after
-   * `filterDuplicateInserts`) and notify the callback. A stable-membership
-   * ordered update — where `splitUpdates` emits delete+insert for the same
-   * key — emits nothing because the key's membership didn't actually change.
+   * Derive the net transitions of `sentToD2Keys` from the post-filter change
+   * stream. `filterDuplicateInserts` has already mutated `sentToD2Keys`:
+   * every surviving insert is a 0→1 transition for its key, every surviving
+   * delete is a 1→0 transition. We count insert/delete per key so that a
+   * stable-membership ordered update (where `splitUpdates` emits
+   * `delete K + insert K`) nets to zero and emits nothing. Cost is
+   * O(|changes|) — no dependency on the size of `sentToD2Keys`.
    */
   private emitTrackedKeyDelta(
-    previousSentKeys: ReadonlySet<string | number>,
     changes: ReadonlyArray<ChangeMessage<any, string | number>>,
   ): void {
     if (!this.onTrackedKeysChange) return
 
-    const touched = new Set<string | number>()
-    for (const change of changes) touched.add(change.key)
+    const net = new Map<string | number, number>()
+    for (const change of changes) {
+      if (change.type === `insert`) {
+        net.set(change.key, (net.get(change.key) ?? 0) + 1)
+      } else if (change.type === `delete`) {
+        net.set(change.key, (net.get(change.key) ?? 0) - 1)
+      }
+    }
 
     const added: Array<string | number> = []
     const removed: Array<string | number> = []
-    for (const key of touched) {
-      const wasTracked = previousSentKeys.has(key)
-      const isTracked = this.sentToD2Keys.has(key)
-      if (!wasTracked && isTracked) added.push(key)
-      else if (wasTracked && !isTracked) removed.push(key)
+    for (const [key, delta] of net) {
+      if (delta > 0) added.push(key)
+      else if (delta < 0) removed.push(key)
     }
 
     if (added.length === 0 && removed.length === 0) return

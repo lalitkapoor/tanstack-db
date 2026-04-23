@@ -1,15 +1,10 @@
-import { serializeValue } from '@tanstack/db-ivm'
 import type { Collection } from '../../collection/index.js'
 import type {
 	TrackedSourceRecord,
 	TrackedSourceRecordsChange,
 } from '../../types.js'
 
-type Entry = {
-	collectionId: string
-	key: string | number
-	refCount: number
-}
+type Entry = { refCount: number }
 
 /**
  * Per-live-query aggregator for tracked source records.
@@ -25,7 +20,12 @@ type Entry = {
  * snapshot as added/removed so downstream views stay consistent.
  */
 export class LiveQueryTrackedSourceRecordsAggregator {
-	private readonly entries = new Map<string, Entry>()
+	// Nested map avoids serializing (collectionId, key) composites. Outer key
+	// is collectionId; inner key is the source record's key (primitive).
+	private readonly entries = new Map<
+		string,
+		Map<string | number, Entry>
+	>()
 	private exposed = false
 
 	constructor(
@@ -46,30 +46,40 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 		added: Iterable<string | number>,
 		removed: Iterable<string | number>,
 	): void {
+		let byKey = this.entries.get(collectionId)
+		if (!byKey) {
+			byKey = new Map()
+			this.entries.set(collectionId, byKey)
+		}
+
 		const netAdded: Array<string | number> = []
 		const netRemoved: Array<string | number> = []
 
 		for (const key of added) {
-			const serialized = serializeValue([collectionId, key])
-			const existing = this.entries.get(serialized)
+			const existing = byKey.get(key)
 			if (existing) {
 				existing.refCount++
 			} else {
-				this.entries.set(serialized, { collectionId, key, refCount: 1 })
+				byKey.set(key, { refCount: 1 })
 				netAdded.push(key)
 			}
 		}
 
 		for (const key of removed) {
-			const serialized = serializeValue([collectionId, key])
-			const existing = this.entries.get(serialized)
+			const existing = byKey.get(key)
 			if (!existing) continue
 			if (existing.refCount === 1) {
-				this.entries.delete(serialized)
-				netRemoved.push(existing.key)
+				byKey.delete(key)
+				netRemoved.push(key)
 			} else {
 				existing.refCount--
 			}
+		}
+
+		// Drop an emptied bucket so `entries.size === 0` correctly reflects
+		// "nothing tracked" for setExposed.
+		if (byKey.size === 0) {
+			this.entries.delete(collectionId)
 		}
 
 		if (!this.exposed) return
@@ -90,21 +100,10 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 		this.exposed = exposed
 		if (this.entries.size === 0) return
 
-		// Group current entries by source collectionId so each source
-		// collection's manager sees its keys in one call.
-		const grouped = new Map<string, Array<string | number>>()
-		for (const entry of this.entries.values()) {
-			let bucket = grouped.get(entry.collectionId)
-			if (!bucket) {
-				bucket = []
-				grouped.set(entry.collectionId, bucket)
-			}
-			bucket.push(entry.key)
-		}
-
 		const added: Array<TrackedSourceRecord> = []
 		const removed: Array<TrackedSourceRecord> = []
-		for (const [collectionId, keys] of grouped) {
+		for (const [collectionId, byKey] of this.entries) {
+			const keys = Array.from(byKey.keys())
 			const collection = this.sourceCollections[collectionId]
 			if (exposed) {
 				collection?._trackedSourceRecords.apply(keys, [])
@@ -120,9 +119,10 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 
 	snapshot(): Array<TrackedSourceRecord> {
 		if (!this.exposed) return []
-		return Array.from(this.entries.values(), ({ collectionId, key }) => ({
-			collectionId,
-			key,
-		}))
+		const records: Array<TrackedSourceRecord> = []
+		for (const [collectionId, byKey] of this.entries) {
+			for (const key of byKey.keys()) records.push({ collectionId, key })
+		}
+		return records
 	}
 }
