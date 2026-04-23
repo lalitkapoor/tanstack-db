@@ -66,31 +66,6 @@ export interface Collection<
 }
 
 /**
- * Attach tracked-source-record helpers to a utils object, wiring them to the
- * collection's manager. Mutates `utils` in place so callers can preserve
- * reference identity (e.g. user-supplied class instances).
- *
- * Idempotent: if a helper is already present on `utils` (e.g. a live query
- * installed a query-local variant via `liveQueryCollectionOptions`), it is
- * left alone.
- */
-function attachTrackedSourceUtils(
-  collection: CollectionImpl<any, any, any, any, any>,
-  utils: UtilsRecord,
-): void {
-  if (typeof utils.getTrackedSourceRecords !== `function`) {
-    utils.getTrackedSourceRecords = () =>
-      collection._trackedSourceRecords.get()
-  }
-  if (typeof utils.subscribeTrackedSourceRecords !== `function`) {
-    utils.subscribeTrackedSourceRecords = (
-      callback: (change: TrackedSourceRecordsChange) => void,
-      options?: SubscribeTrackedSourceRecordsOptions,
-    ) => collection._trackedSourceRecords.subscribe(callback, options)
-  }
-}
-
-/**
  * Creates a new Collection instance with the given configuration
  *
  * @template T - The schema type if a schema is provided, otherwise the type of items in the collection
@@ -283,13 +258,9 @@ export function createCollection(
     schema?: StandardSchemaV1
   },
 ): Collection<any, string | number, UtilsRecord, any, any> {
-  const collection = new CollectionImpl<any, string | number, any, any, any>(
+  return new CollectionImpl<any, string | number, any, any, any>(
     options,
-  )
-  const utils = options.utils ?? {}
-  attachTrackedSourceUtils(collection, utils)
-  collection.utils = utils as CollectionUtils<UtilsRecord>
-  return collection
+  ) as unknown as Collection<any, string | number, UtilsRecord, any, any>
 }
 
 export class CollectionImpl<
@@ -302,9 +273,10 @@ export class CollectionImpl<
   public id: string
   public config: CollectionConfig<TOutput, TKey, TSchema>
 
-  // Utilities namespace
-  // This is populated by createCollection
-  public utils!: CollectionUtils<TUtils>
+  // Utilities namespace. Initialized in the constructor from config.utils
+  // (if provided) with tracked-source helpers attached idempotently. Reference
+  // identity on user-supplied utils objects is preserved — we mutate in place.
+  public utils: CollectionUtils<TUtils>
 
   // Managers
   private _events: CollectionEventsManager
@@ -382,6 +354,22 @@ export class CollectionImpl<
     this._state = new CollectionStateManager(config)
     this._sync = new CollectionSyncManager(config, this.id)
     this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
+
+    // Attach tracked-source helpers to the provided utils in place, so user
+    // class instances keep reference identity. Idempotent: if a helper is
+    // already set (e.g. a live query installed a query-local variant via
+    // `liveQueryCollectionOptions`), it is left alone.
+    const utils = config.utils ?? {}
+    if (typeof utils.getTrackedSourceRecords !== `function`) {
+      utils.getTrackedSourceRecords = () => this._trackedSourceRecords.get()
+    }
+    if (typeof utils.subscribeTrackedSourceRecords !== `function`) {
+      utils.subscribeTrackedSourceRecords = (
+        callback: (change: TrackedSourceRecordsChange) => void,
+        options?: SubscribeTrackedSourceRecordsOptions,
+      ) => this._trackedSourceRecords.subscribe(callback, options)
+    }
+    this.utils = utils as CollectionUtils<TUtils>
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 

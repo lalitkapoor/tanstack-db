@@ -14,9 +14,6 @@ type Entry<TKey> = { key: TKey; refCount: number }
  * live query's aggregator pushes its net alias-level transitions here; this
  * manager dedupes across queries and emits to subscribers only on true 0↔1
  * transitions.
- *
- * Lives as a real field on CollectionImpl — no WeakMap lookup, no
- * utils-injection side-channel.
  */
 export class TrackedSourceRecordsManager<
 	TKey extends string | number = string | number,
