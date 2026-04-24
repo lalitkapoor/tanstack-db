@@ -51,6 +51,7 @@ export class TrackedSourceRecordsManager<
 		}
 
 		if (netAdded.length === 0 && netRemoved.length === 0) return
+		if (this.listeners.size === 0) return
 		const change: TrackedSourceRecordsChange = {
 			added: netAdded.map((key) => this.toRecord(key)),
 			removed: netRemoved.map((key) => this.toRecord(key)),

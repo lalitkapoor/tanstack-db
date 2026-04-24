@@ -630,14 +630,12 @@ export class CollectionConfigBuilder<
     // Session-scoped aggregator that dedupes tracked source records across
     // aliases and fans net transitions out to (a) the builder's long-lived
     // listeners and (b) each source collection's tracked-source manager.
+    // The listener set is passed by reference so the aggregator can iterate
+    // it directly and skip allocation when no one is listening.
     const trackedSourceRecordsAggregator =
       new LiveQueryTrackedSourceRecordsAggregator(
         this.collections,
-        (change) => {
-          for (const listener of this.trackedSourceRecordListeners) {
-            listener(change)
-          }
-        },
+        this.trackedSourceRecordListeners,
       )
     const syncState: SyncState = {
       messagesCount: 0,

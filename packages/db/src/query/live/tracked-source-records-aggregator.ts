@@ -28,12 +28,20 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 	>()
 	private exposed = false
 
+	/**
+	 * `listeners` is the live-query's long-lived external-subscriber set
+	 * owned by CollectionConfigBuilder. Held by reference so the aggregator
+	 * can (a) check `size` to skip allocation when nobody is listening and
+	 * (b) iterate directly without an extra callback hop.
+	 */
 	constructor(
 		private readonly sourceCollections: Record<
 			string,
 			Collection<any, any, any>
 		>,
-		private readonly onChange: (change: TrackedSourceRecordsChange) => void,
+		private readonly listeners: ReadonlySet<
+			(change: TrackedSourceRecordsChange) => void
+		>,
 	) {}
 
 	/**
@@ -89,10 +97,12 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 			netAdded,
 			netRemoved,
 		)
-		this.onChange({
+		if (this.listeners.size === 0) return
+		const change: TrackedSourceRecordsChange = {
 			added: netAdded.map((key) => ({ collectionId, key })),
 			removed: netRemoved.map((key) => ({ collectionId, key })),
-		})
+		}
+		for (const listener of this.listeners) listener(change)
 	}
 
 	setExposed(exposed: boolean): void {
@@ -100,6 +110,7 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 		this.exposed = exposed
 		if (this.entries.size === 0) return
 
+		const hasListeners = this.listeners.size > 0
 		const added: Array<TrackedSourceRecord> = []
 		const removed: Array<TrackedSourceRecord> = []
 		for (const [collectionId, byKey] of this.entries) {
@@ -107,14 +118,20 @@ export class LiveQueryTrackedSourceRecordsAggregator {
 			const collection = this.sourceCollections[collectionId]
 			if (exposed) {
 				collection?._trackedSourceRecords.apply(keys, [])
-				for (const key of keys) added.push({ collectionId, key })
+				if (hasListeners) {
+					for (const key of keys) added.push({ collectionId, key })
+				}
 			} else {
 				collection?._trackedSourceRecords.apply([], keys)
-				for (const key of keys) removed.push({ collectionId, key })
+				if (hasListeners) {
+					for (const key of keys) removed.push({ collectionId, key })
+				}
 			}
 		}
 
-		this.onChange({ added, removed })
+		if (!hasListeners) return
+		const change: TrackedSourceRecordsChange = { added, removed }
+		for (const listener of this.listeners) listener(change)
 	}
 
 	snapshot(): Array<TrackedSourceRecord> {
