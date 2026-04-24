@@ -15,8 +15,8 @@ type Entry = { refCount: number }
  * multiple times).
  *
  * `exposed` gates whether net 0↔1 transitions are visible to the outside:
- * we only propagate to source collections and call `onChange` while the
- * live query has subscribers. Flipping `exposed` replays the current
+ * we only propagate to source collections and fan out to listeners while
+ * the live query has subscribers. Flipping `exposed` replays the current
  * snapshot as added/removed so downstream views stay consistent.
  */
 export class LiveQueryTrackedSourceRecordsAggregator {
