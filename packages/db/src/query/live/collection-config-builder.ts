@@ -602,7 +602,9 @@ export class CollectionConfigBuilder<
    * subscribers.
    */
   getTrackedSourceRecords(): Array<TrackedSourceRecord> {
-    return this.currentSyncState?.trackedSourceRecordsAggregator.snapshot() ?? []
+    return (
+      this.currentSyncState?.trackedSourceRecordsAggregator.snapshot() ?? []
+    )
   }
 
   subscribeTrackedSourceRecords(
