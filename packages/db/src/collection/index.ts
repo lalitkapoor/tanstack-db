@@ -355,16 +355,24 @@ export class CollectionImpl<
     this._sync = new CollectionSyncManager(config, this.id)
     this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
 
-    // Spread merge (not Object.assign): config.utils is not mutated, and
-    // user fields win on name collision since they appear last.
-    this.utils = {
-      getTrackedSourceRecords: () => this._trackedSourceRecords.get(),
-      subscribeTrackedSourceRecords: (
+    // Wrap user's utils via Object.create so prototype methods and getters
+    // (e.g. class-instance utils) survive. Tracked-source helpers go on the
+    // wrapper as own properties, but only if not already provided by the
+    // user — so user-supplied entries win on name collision. config.utils
+    // is never mutated; sharing it across collections is safe (each call
+    // creates a fresh wrapper).
+    const wrappedUtils = Object.create(config.utils ?? null)
+    if (!(`getTrackedSourceRecords` in wrappedUtils)) {
+      wrappedUtils.getTrackedSourceRecords = () =>
+        this._trackedSourceRecords.get()
+    }
+    if (!(`subscribeTrackedSourceRecords` in wrappedUtils)) {
+      wrappedUtils.subscribeTrackedSourceRecords = (
         callback: (change: TrackedSourceRecordsChange) => void,
         options?: SubscribeTrackedSourceRecordsOptions,
-      ) => this._trackedSourceRecords.subscribe(callback, options),
-      ...(config.utils ?? {}),
-    } as CollectionUtils<TUtils>
+      ) => this._trackedSourceRecords.subscribe(callback, options)
+    }
+    this.utils = wrappedUtils
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 
