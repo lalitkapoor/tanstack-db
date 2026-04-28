@@ -9,18 +9,6 @@ interface TestUtils extends UtilsRecord {
   asyncFn: (input: number) => Promise<number>
 }
 
-class GetterBackedUtils {
-  constructor(private readonly active: boolean) {}
-
-  public get isActive() {
-    return this.active
-  }
-
-  public describe() {
-    return this.active ? `active` : `inactive`
-  }
-}
-
 describe(`Utility exposure pattern`, () => {
   test(`exposes utilities at top level and under .utils namespace`, () => {
     // Create mock utility functions
@@ -116,24 +104,7 @@ describe(`Utility exposure pattern`, () => {
     // But we've verified the utilities work
   })
 
-  test(`preserves getter-backed utility objects when attaching tracked source helpers`, () => {
-    const utils = new GetterBackedUtils(true)
-    const collection = createCollection({
-      getKey: (item: { id: string }) => item.id,
-      sync: {
-        sync: () => {},
-      },
-      utils,
-    })
-
-    expect(collection.utils).toBe(utils)
-    expect(collection.utils.isActive).toBe(true)
-    expect(collection.utils.describe()).toBe(`active`)
-    expect(collection.utils.getTrackedSourceRecords).toBeDefined()
-    expect(collection.utils.subscribeTrackedSourceRecords).toBeDefined()
-  })
-
-  test(`preserves custom live query utils while attaching live query helpers`, () => {
+  test(`exposes custom live query utils alongside live query helpers`, () => {
     const source = createCollection({
       getKey: (item: { id: string }) => item.id,
       sync: {
@@ -148,10 +119,29 @@ describe(`Utility exposure pattern`, () => {
       utils,
     })
 
-    expect(liveQuery.utils).toBe(utils)
     expect(liveQuery.utils.describeMode()).toBe(`search`)
     expect(liveQuery.utils.getRunCount).toBeDefined()
     expect(liveQuery.utils.getTrackedSourceRecords).toBeDefined()
     expect(liveQuery.utils.subscribeTrackedSourceRecords).toBeDefined()
+  })
+
+  test(`user-supplied utils override built-in helpers on name collision`, () => {
+    const source = createCollection({
+      getKey: (item: { id: string }) => item.id,
+      sync: {
+        sync: () => {},
+      },
+    })
+
+    // User deliberately overrides getRunCount; their version should win.
+    const userGetRunCount = () => 42
+    const utils = { getRunCount: userGetRunCount }
+    const liveQuery = createLiveQueryCollection({
+      query: (q) => q.from({ source }),
+      utils,
+    })
+
+    expect(liveQuery.utils.getRunCount).toBe(userGetRunCount)
+    expect(liveQuery.utils.getRunCount()).toBe(42)
   })
 })

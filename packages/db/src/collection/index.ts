@@ -355,21 +355,15 @@ export class CollectionImpl<
     this._sync = new CollectionSyncManager(config, this.id)
     this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
 
-    // Attach tracked-source helpers to the provided utils in place, so user
-    // class instances keep reference identity. Idempotent: if a helper is
-    // already set (e.g. a live query installed a query-local variant via
-    // `liveQueryCollectionOptions`), it is left alone.
-    const utils = config.utils ?? {}
-    if (typeof utils.getTrackedSourceRecords !== `function`) {
-      utils.getTrackedSourceRecords = () => this._trackedSourceRecords.get()
-    }
-    if (typeof utils.subscribeTrackedSourceRecords !== `function`) {
-      utils.subscribeTrackedSourceRecords = (
+    // User fields win on name collision (built-ins first, user spread last).
+    this.utils = {
+      getTrackedSourceRecords: () => this._trackedSourceRecords.get(),
+      subscribeTrackedSourceRecords: (
         callback: (change: TrackedSourceRecordsChange) => void,
         options?: SubscribeTrackedSourceRecordsOptions,
-      ) => this._trackedSourceRecords.subscribe(callback, options)
-    }
-    this.utils = utils as CollectionUtils<TUtils>
+      ) => this._trackedSourceRecords.subscribe(callback, options),
+      ...(config.utils ?? {}),
+    } as CollectionUtils<TUtils>
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 

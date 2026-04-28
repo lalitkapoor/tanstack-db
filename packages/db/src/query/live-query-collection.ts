@@ -196,14 +196,9 @@ export function createLiveQueryCollection<
   > & { utils?: TUtils }
   const options = liveQueryCollectionOptions(config as any)
 
+  // Merge custom utils if provided, preserving the getBuilder() method for dependency tracking
   if (config.utils) {
-    // Merge the built-in live-query utils into the user's utils object in
-    // place so `liveQuery.utils === config.utils` (reference identity).
-    // createCollection will then idempotently attach the base tracked-source
-    // helpers on top — the query-local variants installed above win because
-    // the attach is a "only set if missing" check.
-    Object.assign(config.utils, options.utils)
-    options.utils = config.utils as unknown as LiveQueryBuiltInUtils
+    options.utils = { ...options.utils, ...config.utils }
   }
 
   return bridgeToCreateCollection(options) as CollectionForContext<
