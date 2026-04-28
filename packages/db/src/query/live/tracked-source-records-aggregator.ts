@@ -1,8 +1,4 @@
 import type { Collection } from '../../collection/index.js'
-import type {
-  TrackedSourceRecord,
-  TrackedSourceRecordsChange,
-} from '../../types.js'
 
 type Entry = { refCount: number }
 
@@ -12,12 +8,14 @@ type Entry = { refCount: number }
  * Lives on a single sync session — dies with it. Refcounts over aliases
  * within one query (a self-join references the same base collection under
  * multiple aliases, so the same (collectionId, key) pair can be added
- * multiple times).
+ * multiple times). Net 0↔1 transitions are propagated to each source
+ * collection's `_trackedSourceRecords` manager, where end users observe
+ * them via `collection.subscribeTrackedSourceRecords`.
  *
- * `exposed` gates whether net 0↔1 transitions are visible to the outside:
- * we only propagate to source collections and fan out to listeners while
- * the live query has subscribers. Flipping `exposed` replays the current
- * snapshot as added/removed so downstream views stay consistent.
+ * `exposed` gates propagation: only push to source collections while the
+ * live query has active subscribers. Flipping `exposed` replays the
+ * current snapshot as added/removed so the source-collection view stays
+ * consistent.
  */
 export class LiveQueryTrackedSourceRecordsAggregator {
   // Nested map avoids serializing (collectionId, key) composites. Outer key
@@ -25,19 +23,10 @@ export class LiveQueryTrackedSourceRecordsAggregator {
   private readonly entries = new Map<string, Map<string | number, Entry>>()
   private exposed = false
 
-  /**
-   * `listeners` is the live-query's long-lived external-subscriber set
-   * owned by CollectionConfigBuilder. Held by reference so the aggregator
-   * can (a) check `size` to skip allocation when nobody is listening and
-   * (b) iterate directly without an extra callback hop.
-   */
   constructor(
     private readonly sourceCollections: Record<
       string,
       Collection<any, any, any>
-    >,
-    private readonly listeners: ReadonlySet<
-      (change: TrackedSourceRecordsChange) => void
     >,
   ) {}
 
@@ -94,12 +83,6 @@ export class LiveQueryTrackedSourceRecordsAggregator {
       netAdded,
       netRemoved,
     )
-    if (this.listeners.size === 0) return
-    const change: TrackedSourceRecordsChange = {
-      added: netAdded.map((key) => ({ collectionId, key })),
-      removed: netRemoved.map((key) => ({ collectionId, key })),
-    }
-    for (const listener of this.listeners) listener(change)
   }
 
   setExposed(exposed: boolean): void {
@@ -107,36 +90,14 @@ export class LiveQueryTrackedSourceRecordsAggregator {
     this.exposed = exposed
     if (this.entries.size === 0) return
 
-    const hasListeners = this.listeners.size > 0
-    const added: Array<TrackedSourceRecord> = []
-    const removed: Array<TrackedSourceRecord> = []
     for (const [collectionId, byKey] of this.entries) {
       const keys = Array.from(byKey.keys())
       const collection = this.sourceCollections[collectionId]
       if (exposed) {
         collection?._trackedSourceRecords.apply(keys, [])
-        if (hasListeners) {
-          for (const key of keys) added.push({ collectionId, key })
-        }
       } else {
         collection?._trackedSourceRecords.apply([], keys)
-        if (hasListeners) {
-          for (const key of keys) removed.push({ collectionId, key })
-        }
       }
     }
-
-    if (!hasListeners) return
-    const change: TrackedSourceRecordsChange = { added, removed }
-    for (const listener of this.listeners) listener(change)
-  }
-
-  snapshot(): Array<TrackedSourceRecord> {
-    if (!this.exposed) return []
-    const records: Array<TrackedSourceRecord> = []
-    for (const [collectionId, byKey] of this.entries) {
-      for (const key of byKey.keys()) records.push({ collectionId, key })
-    }
-    return records
   }
 }

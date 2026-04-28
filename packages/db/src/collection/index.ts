@@ -25,8 +25,8 @@ import type {
   ChangeMessage,
   CollectionConfig,
   CollectionStatus,
-  CollectionUtils,
   CurrentStateAsChangesOptions,
+  Fn,
   InferSchemaInput,
   InferSchemaOutput,
   InsertConfig,
@@ -36,6 +36,7 @@ import type {
   StringCollationConfig,
   SubscribeChangesOptions,
   SubscribeTrackedSourceRecordsOptions,
+  TrackedSourceRecord,
   TrackedSourceRecordsChange,
   Transaction as TransactionType,
   UtilsRecord,
@@ -61,7 +62,7 @@ export interface Collection<
   TSchema extends StandardSchemaV1 = StandardSchemaV1,
   TInsertInput extends object = T,
 > extends CollectionImpl<T, TKey, TUtils, TSchema, TInsertInput> {
-  readonly utils: CollectionUtils<TUtils>
+  readonly utils: TUtils
   readonly singleResult?: true
 }
 
@@ -258,9 +259,24 @@ export function createCollection(
     schema?: StandardSchemaV1
   },
 ): Collection<any, string | number, UtilsRecord, any, any> {
-  return new CollectionImpl<any, string | number, any, any, any>(
+  const collection = new CollectionImpl<any, string | number, any, any, any>(
     options,
-  ) as unknown as Collection<any, string | number, UtilsRecord, any, any>
+  )
+
+  // Attach utils to collection
+  if (options.utils) {
+    collection.utils = options.utils
+  } else {
+    collection.utils = {}
+  }
+
+  return collection as unknown as Collection<
+    any,
+    string | number,
+    UtilsRecord,
+    any,
+    any
+  >
 }
 
 export class CollectionImpl<
@@ -273,10 +289,9 @@ export class CollectionImpl<
   public id: string
   public config: CollectionConfig<TOutput, TKey, TSchema>
 
-  // Utilities namespace. Initialized in the constructor from config.utils
-  // (if provided) with tracked-source helpers attached idempotently. Reference
-  // identity on user-supplied utils objects is preserved — we mutate in place.
-  public utils: CollectionUtils<TUtils>
+  // Utilities namespace
+  // This is populated by createCollection
+  public utils: Record<string, Fn> = {}
 
   // Managers
   private _events: CollectionEventsManager
@@ -354,25 +369,6 @@ export class CollectionImpl<
     this._state = new CollectionStateManager(config)
     this._sync = new CollectionSyncManager(config, this.id)
     this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
-
-    // Wrap user's utils via Object.create so prototype methods and getters
-    // (e.g. class-instance utils) survive. Tracked-source helpers go on the
-    // wrapper as own properties, but only if not already provided by the
-    // user — so user-supplied entries win on name collision. config.utils
-    // is never mutated; sharing it across collections is safe (each call
-    // creates a fresh wrapper).
-    const wrappedUtils = Object.create(config.utils ?? null)
-    if (!(`getTrackedSourceRecords` in wrappedUtils)) {
-      wrappedUtils.getTrackedSourceRecords = () =>
-        this._trackedSourceRecords.get()
-    }
-    if (!(`subscribeTrackedSourceRecords` in wrappedUtils)) {
-      wrappedUtils.subscribeTrackedSourceRecords = (
-        callback: (change: TrackedSourceRecordsChange) => void,
-        options?: SubscribeTrackedSourceRecordsOptions,
-      ) => this._trackedSourceRecords.subscribe(callback, options)
-    }
-    this.utils = wrappedUtils
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 
@@ -958,6 +954,29 @@ export class CollectionImpl<
     options: SubscribeChangesOptions<TOutput, TKey> = {},
   ): CollectionSubscription {
     return this._changes.subscribeChanges(callback, options)
+  }
+
+  /**
+   * Snapshot of source records that are currently being used by active live
+   * queries depending on this collection. Returns the union across all such
+   * queries — each record appears once regardless of how many queries are
+   * referencing it.
+   */
+  public getTrackedSourceRecords(): Array<TrackedSourceRecord> {
+    return this._trackedSourceRecords.get()
+  }
+
+  /**
+   * Subscribe to changes in the set of source records being used by active
+   * live queries depending on this collection. The callback fires with
+   * `added` deltas when the first query starts using a record, and `removed`
+   * deltas when the last query stops using it.
+   */
+  public subscribeTrackedSourceRecords(
+    callback: (change: TrackedSourceRecordsChange) => void,
+    options?: SubscribeTrackedSourceRecordsOptions,
+  ): () => void {
+    return this._trackedSourceRecords.subscribe(callback, options)
   }
 
   /**

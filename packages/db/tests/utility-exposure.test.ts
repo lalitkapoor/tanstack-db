@@ -56,12 +56,9 @@ describe(`Utility exposure pattern`, () => {
       sync: mockSync,
     })
 
-    // Collections always expose tracked-source helpers, even without custom utils
+    // Verify .utils exists but is empty
     expect(collection.utils).toBeDefined()
-    expect(Object.keys(collection.utils).sort()).toEqual([
-      `getTrackedSourceRecords`,
-      `subscribeTrackedSourceRecords`,
-    ])
+    expect(Object.keys(collection.utils).length).toBe(0)
   })
 
   test(`preserves type information for collection data`, async () => {
@@ -121,8 +118,9 @@ describe(`Utility exposure pattern`, () => {
 
     expect(liveQuery.utils.describeMode()).toBe(`search`)
     expect(liveQuery.utils.getRunCount).toBeDefined()
-    expect(liveQuery.utils.getTrackedSourceRecords).toBeDefined()
-    expect(liveQuery.utils.subscribeTrackedSourceRecords).toBeDefined()
+    // Tracked-source helpers live on the Collection itself, not on utils.
+    expect(liveQuery.getTrackedSourceRecords).toBeDefined()
+    expect(liveQuery.subscribeTrackedSourceRecords).toBeDefined()
   })
 
   test(`user-supplied utils override built-in helpers on name collision`, () => {
