@@ -355,7 +355,8 @@ export class CollectionImpl<
     this._sync = new CollectionSyncManager(config, this.id)
     this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
 
-    // User fields win on name collision (built-ins first, user spread last).
+    // Spread merge (not Object.assign): config.utils is not mutated, and
+    // user fields win on name collision since they appear last.
     this.utils = {
       getTrackedSourceRecords: () => this._trackedSourceRecords.get(),
       subscribeTrackedSourceRecords: (
