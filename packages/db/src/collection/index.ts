@@ -4,6 +4,7 @@ import {
   CollectionRequiresSyncConfigError,
 } from '../errors'
 import { currentStateAsChanges } from './change-events'
+import { TrackedSourceRecordsManager } from './tracked-source-records.js'
 
 import { CollectionStateManager } from './state'
 import { CollectionChangesManager } from './changes'
@@ -34,6 +35,9 @@ import type {
   SingleResult,
   StringCollationConfig,
   SubscribeChangesOptions,
+  SubscribeTrackedSourceRecordsOptions,
+  TrackedSourceRecord,
+  TrackedSourceRecordsChange,
   Transaction as TransactionType,
   UtilsRecord,
   WritableDeep,
@@ -266,7 +270,13 @@ export function createCollection(
     collection.utils = {}
   }
 
-  return collection
+  return collection as unknown as Collection<
+    any,
+    string | number,
+    UtilsRecord,
+    any,
+    any
+  >
 }
 
 export class CollectionImpl<
@@ -299,6 +309,22 @@ export class CollectionImpl<
   // The core state of the collection is "public" so that is accessible in tests
   // and for debugging
   public _state: CollectionStateManager<TOutput, TKey, TSchema, TInput>
+  // Aggregated view of source-records currently being used by active live
+  // queries that depend on this collection. Public so live-query aggregators
+  // can push deltas in.
+  public _trackedSourceRecords: TrackedSourceRecordsManager<TKey>
+  // For live-query collections only: a live-query-local view of "source
+  // records this query is currently using." Set by the live-query path
+  // during construction; undefined on base collections. When present, the
+  // public `getTrackedSourceRecords` / `subscribeTrackedSourceRecords`
+  // methods route to this view instead of `_trackedSourceRecords`.
+  public _liveQueryTrackedSourceView?: {
+    snapshot: () => Array<TrackedSourceRecord>
+    subscribe: (
+      callback: (change: TrackedSourceRecordsChange) => void,
+      options?: SubscribeTrackedSourceRecordsOptions,
+    ) => () => void
+  }
 
   /**
    * When set, collection consumers should defer processing incoming data
@@ -354,6 +380,7 @@ export class CollectionImpl<
     this._mutations = new CollectionMutationsManager(config, this.id)
     this._state = new CollectionStateManager(config)
     this._sync = new CollectionSyncManager(config, this.id)
+    this._trackedSourceRecords = new TrackedSourceRecordsManager<TKey>(this.id)
 
     this.comparisonOpts = buildCompareOptionsFromConfig(config)
 
@@ -939,6 +966,42 @@ export class CollectionImpl<
     options: SubscribeChangesOptions<TOutput, TKey> = {},
   ): CollectionSubscription {
     return this._changes.subscribeChanges(callback, options)
+  }
+
+  /**
+   * Snapshot of source records currently being tracked through this
+   * collection's data flow.
+   *
+   * On a base collection: the union of records OF this collection being
+   * used by any active live query. Each record appears once regardless
+   * of how many queries reference it.
+   *
+   * On a live query collection: the records FROM this query's source
+   * collections that the query is currently using.
+   *
+   * Both views answer "what source records are currently flowing through
+   * me," from opposite ends of the data-flow graph.
+   */
+  public getTrackedSourceRecords(): Array<TrackedSourceRecord> {
+    return (
+      this._liveQueryTrackedSourceView?.snapshot() ??
+      this._trackedSourceRecords.get()
+    )
+  }
+
+  /**
+   * Subscribe to changes in the set of source records tracked through this
+   * collection's data flow. See `getTrackedSourceRecords` for the per-
+   * collection-type semantics.
+   */
+  public subscribeTrackedSourceRecords(
+    callback: (change: TrackedSourceRecordsChange) => void,
+    options?: SubscribeTrackedSourceRecordsOptions,
+  ): () => void {
+    if (this._liveQueryTrackedSourceView) {
+      return this._liveQueryTrackedSourceView.subscribe(callback, options)
+    }
+    return this._trackedSourceRecords.subscribe(callback, options)
   }
 
   /**
