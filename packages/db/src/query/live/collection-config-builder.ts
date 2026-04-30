@@ -55,7 +55,7 @@ import type {
 } from './types.js'
 import type { AllCollectionEvents } from '../../collection/events.js'
 
-export type LiveQueryBuiltInUtils = {
+export type LiveQueryCollectionUtils = UtilsRecord & {
   getRunCount: () => number
   /**
    * Sets the offset and limit of an ordered query.
@@ -72,9 +72,6 @@ export type LiveQueryBuiltInUtils = {
   getWindow: () => { offset: number; limit: number } | undefined
   [LIVE_QUERY_INTERNAL]: LiveQueryInternalUtils
 }
-
-export type LiveQueryCollectionUtils<TUtils extends UtilsRecord = {}> = TUtils &
-  LiveQueryBuiltInUtils
 
 type PendingGraphRun = {
   loadCallbacks: Set<() => boolean>
@@ -154,8 +151,8 @@ export class CollectionConfigBuilder<
     (change: TrackedSourceRecordsChange) => void
   >()
 
-  // Adapter the live-query Collection's `_liveQueryTrackedSourceView` field
-  // points to. Routes through the current sync session's aggregator (which
+  // Adapter the live-query Collection routes through for its tracked-source
+  // record view. Routes through the current sync session's aggregator (which
   // can come and go) but the adapter itself is stable across sessions.
   public readonly liveQueryTrackedSourceView = {
     snapshot: (): Array<TrackedSourceRecord> =>
@@ -167,8 +164,7 @@ export class CollectionConfigBuilder<
       this.trackedSourceRecordListeners.add(callback)
       if (options?.includeInitialState) {
         const added =
-          this.currentSyncState?.trackedSourceRecordsAggregator.snapshot() ??
-          []
+          this.currentSyncState?.trackedSourceRecordsAggregator.snapshot() ?? []
         if (added.length > 0) callback({ added, removed: [] })
       }
       return () => {
@@ -259,7 +255,7 @@ export class CollectionConfigBuilder<
   }
 
   getConfig(): CollectionConfigSingleRowOption<TResult> & {
-    utils: LiveQueryBuiltInUtils
+    utils: LiveQueryCollectionUtils
   } {
     return {
       id: this.id,
@@ -623,11 +619,10 @@ export class CollectionConfigBuilder<
 
     // Session-scoped aggregator that dedupes tracked source records across
     // aliases (handles self-joins), propagates net transitions to each
-    // source collection's _trackedSourceRecords manager, and fans out to
+    // source collection's tracked-source-records manager, and fans out to
     // the builder's long-lived listener Set (so external subscribers reach
-    // the per-query view via the live-query Collection's
-    // `_liveQueryTrackedSourceView` adapter). Lives only for this sync
-    // session.
+    // the per-query view via the live-query Collection). Lives only for this
+    // sync session.
     const trackedSourceRecordsAggregator =
       new LiveQueryTrackedSourceRecordsAggregator(
         this.collections,

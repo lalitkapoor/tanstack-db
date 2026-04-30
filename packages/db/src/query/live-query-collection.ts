@@ -4,10 +4,7 @@ import {
   getBuilderFromConfig,
   registerCollectionBuilder,
 } from './live/collection-registry.js'
-import type {
-  LiveQueryBuiltInUtils,
-  LiveQueryCollectionUtils,
-} from './live/collection-config-builder.js'
+import type { LiveQueryCollectionUtils } from './live/collection-config-builder.js'
 import type { LiveQueryCollectionConfig } from './live/types.js'
 import type {
   ExtractContext,
@@ -83,7 +80,7 @@ export function liveQueryCollectionOptions<
     query: RootQueryFn<TQuery> | RootQueryBuilder<TQuery>
   },
 ): CollectionConfigForContext<TContext, TResult> & {
-  utils: LiveQueryBuiltInUtils
+  utils: LiveQueryCollectionUtils
 } {
   const collectionConfigBuilder = new CollectionConfigBuilder<
     TContext,
@@ -92,7 +89,7 @@ export function liveQueryCollectionOptions<
   return collectionConfigBuilder.getConfig() as CollectionConfigForContext<
     TContext,
     TResult
-  > & { utils: LiveQueryBuiltInUtils }
+  > & { utils: LiveQueryCollectionUtils }
 }
 
 /**
@@ -153,7 +150,7 @@ export function createLiveQueryCollection<
     utils?: TUtils
   },
 ): CollectionForContext<TContext, RootQueryResult<TContext>> & {
-  utils: LiveQueryCollectionUtils<TUtils>
+  utils: LiveQueryCollectionUtils & TUtils
 }
 
 // Implementation
@@ -168,7 +165,7 @@ export function createLiveQueryCollection<
         q: InitialQueryBuilder,
       ) => QueryBuilder<TContext> & RootObjectResultConstraint<TContext>),
 ): CollectionForContext<TContext, TResult> & {
-  utils: LiveQueryCollectionUtils<TUtils>
+  utils: LiveQueryCollectionUtils & TUtils
 } {
   // Determine if the argument is a function (query) or a config object
   if (typeof configOrQuery === `function`) {
@@ -184,7 +181,7 @@ export function createLiveQueryCollection<
     return bridgeToCreateCollection(options) as CollectionForContext<
       TContext,
       TResult
-    > & { utils: LiveQueryCollectionUtils<TUtils> }
+    > & { utils: LiveQueryCollectionUtils & TUtils }
   }
 
   // Config object case. Same overload implementation limitation as above:
@@ -204,32 +201,29 @@ export function createLiveQueryCollection<
   return bridgeToCreateCollection(options) as CollectionForContext<
     TContext,
     TResult
-  > & { utils: LiveQueryCollectionUtils<TUtils> }
+  > & { utils: LiveQueryCollectionUtils & TUtils }
 }
 
 /**
  * Bridge function that handles the type compatibility between query2's TResult
  * and core collection's output type without exposing ugly type assertions to users
  */
-function bridgeToCreateCollection<TResult extends object>(
-  options: CollectionConfig<TResult> & { utils: LiveQueryBuiltInUtils },
-): Collection<TResult, string | number, LiveQueryBuiltInUtils> {
+function bridgeToCreateCollection<
+  TResult extends object,
+  TUtils extends UtilsRecord = {},
+>(
+  options: CollectionConfig<TResult> & { utils: TUtils },
+): Collection<TResult, string | number, TUtils> {
+  const builder = getBuilderFromConfig(options)
   const collection = createCollection(options as any) as unknown as Collection<
     TResult,
     string | number,
-    LiveQueryBuiltInUtils
+    LiveQueryCollectionUtils
   >
 
-  const builder = getBuilderFromConfig(options)
   if (builder) {
     registerCollectionBuilder(collection, builder)
-    // Route the Collection's tracked-source-records public methods through
-    // the live-query-local view (the source-records this query is using),
-    // not the base-collection refcount manager (which is "consumers of mine").
-    // The adapter is stable across sync sessions; the underlying aggregator
-    // is replaced each session.
-    collection._liveQueryTrackedSourceView = builder.liveQueryTrackedSourceView
   }
 
-  return collection
+  return collection as unknown as Collection<TResult, string | number, TUtils>
 }
