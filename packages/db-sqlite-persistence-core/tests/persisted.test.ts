@@ -57,10 +57,12 @@ type RecordingAdapter = PersistenceAdapter & {
   rows: Map<string, Todo>
   rowMetadata: Map<string, unknown>
   collectionMetadata: Map<string, unknown>
+  persistedIndexes: Set<string>
 }
 
 function createRecordingAdapter(
   initialRows: Array<Todo> = [],
+  initialIndexes: Array<string> = [],
 ): RecordingAdapter {
   const rows = new Map(initialRows.map((row) => [row.id, row]))
   const rowMetadata = new Map<string, unknown>()
@@ -74,6 +76,7 @@ function createRecordingAdapter(
     markIndexRemovedCalls: [],
     loadSubsetCalls: [],
     loadCollectionMetadataCalls: [],
+    persistedIndexes: new Set(initialIndexes),
     loadSubset: (collectionId, options, ctx) => {
       adapter.loadSubsetCalls.push({
         collectionId,
@@ -107,6 +110,8 @@ function createRecordingAdapter(
           metadata: rowMetadata.get(value.id),
         })),
       ),
+    listIndexes: () =>
+      Promise.resolve(Array.from(adapter.persistedIndexes.values())),
     applyCommittedTx: (collectionId, tx) => {
       adapter.applyCommittedTxCalls.push({
         collectionId,
@@ -162,10 +167,12 @@ function createRecordingAdapter(
     },
     ensureIndex: (collectionId, signature) => {
       adapter.ensureIndexCalls.push({ collectionId, signature })
+      adapter.persistedIndexes.add(signature)
       return Promise.resolve()
     },
     markIndexRemoved: (collectionId, signature) => {
       adapter.markIndexRemovedCalls.push({ collectionId, signature })
+      adapter.persistedIndexes.delete(signature)
       return Promise.resolve()
     },
   }
@@ -895,6 +902,50 @@ describe(`persistedCollectionOptions`, () => {
         (call) => call.signature === expectedPreSyncSignature,
       ),
     ).toBe(true)
+  })
+
+  it(`removes stale persisted indexes on restart before ensuring current ones`, async () => {
+    const staleSignature = `stale-signature`
+    const adapter = createRecordingAdapter([], [staleSignature])
+
+    const collection = createCollection(
+      persistedCollectionOptions<Todo, string>({
+        id: `sync-present-index-reconcile`,
+        getKey: (item) => item.id,
+        defaultIndexType: BasicIndex,
+        sync: {
+          sync: ({ markReady }) => {
+            markReady()
+          },
+        },
+        persistence: {
+          adapter,
+        },
+      }),
+    )
+
+    collection.createIndex((row) => row.title, {
+      name: `current-title`,
+    })
+    const desiredSignature = collection.getIndexMetadata()[0]?.signature
+
+    await collection.preload()
+    await flushAsyncWork()
+
+    expect(desiredSignature).toBeDefined()
+    expect(
+      adapter.markIndexRemovedCalls.some(
+        (call) => call.signature === staleSignature,
+      ),
+    ).toBe(true)
+    expect(
+      adapter.ensureIndexCalls.some(
+        (call) => call.signature === desiredSignature,
+      ),
+    ).toBe(true)
+    expect(Array.from(adapter.persistedIndexes.values())).toEqual([
+      desiredSignature,
+    ])
   })
 
   it(`queues remote sync writes that arrive during hydration`, async () => {

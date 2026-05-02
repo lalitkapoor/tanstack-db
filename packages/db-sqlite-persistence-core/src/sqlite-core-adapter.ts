@@ -1493,6 +1493,20 @@ export class SQLiteCorePersistenceAdapter implements PersistenceAdapter {
     }
   }
 
+  async listIndexes(collectionId: string): Promise<Array<string>> {
+    await this.ensureCollectionReady(collectionId)
+
+    const rows = await this.driver.query<{ signature: string }>(
+      `SELECT signature
+       FROM persisted_index_registry
+       WHERE collection_id = ? AND removed = 0
+       ORDER BY signature ASC`,
+      [collectionId],
+    )
+
+    return rows.map((row) => row.signature)
+  }
+
   async getStreamPosition(collectionId: string): Promise<{
     latestTerm: number
     latestSeq: number
