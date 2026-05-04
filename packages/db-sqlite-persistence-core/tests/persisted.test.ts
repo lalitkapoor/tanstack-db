@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BasicIndex,
   IR,
@@ -24,8 +24,9 @@ import type {
   ProtocolEnvelope,
   PullSinceResponse,
   TxCommitted,
+  UpstreamLoadSubsetMode,
 } from '../src'
-import type { LoadSubsetOptions, SyncConfig } from '@tanstack/db'
+import type { Collection, LoadSubsetOptions, SyncConfig } from '@tanstack/db'
 
 type Todo = {
   id: string
@@ -254,6 +255,110 @@ const stripVirtualProps = <T extends Record<string, any> | undefined>(
 
 async function flushAsyncWork(delayMs: number = 0): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delayMs))
+}
+
+function createDeferredVoid(): {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (reason?: unknown) => void
+  isPending: () => boolean
+} {
+  let resolve: (() => void) | undefined
+  let reject: ((reason?: unknown) => void) | undefined
+  let pending = true
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = () => {
+      pending = false
+      resolvePromise()
+    }
+    reject = (reason?: unknown) => {
+      pending = false
+      rejectPromise(reason)
+    }
+  })
+
+  if (!resolve || !reject) {
+    throw new Error(`Failed to create deferred promise`)
+  }
+
+  return {
+    promise,
+    resolve,
+    reject,
+    isPending: () => pending,
+  }
+}
+
+function expectLoadSubsetPromise(
+  result: Promise<void> | true | undefined,
+): Promise<void> {
+  if (!(result instanceof Promise)) {
+    throw new Error(`Expected loadSubset to return a promise`)
+  }
+
+  return result
+}
+
+function createSyncWithLoadSubset(
+  loadSubset: () => true | Promise<void>,
+): SyncConfig<Todo, string> {
+  return {
+    sync: ({ markReady }) => {
+      markReady()
+      return {
+        loadSubset,
+      }
+    },
+  }
+}
+
+function createOnDemandPersistedCollection(params: {
+  id: string
+  adapter: RecordingAdapter
+  coordinator?: PersistedCollectionCoordinator
+  upstreamLoadSubsetMode?: UpstreamLoadSubsetMode
+  loadSubset: () => true | Promise<void>
+}): Collection<Todo, string> {
+  const persistence: PersistedCollectionPersistence = params.coordinator
+    ? { adapter: params.adapter, coordinator: params.coordinator }
+    : { adapter: params.adapter }
+  const baseOptions = {
+    id: params.id,
+    syncMode: `on-demand`,
+    getKey: (item: Todo) => item.id,
+    sync: createSyncWithLoadSubset(params.loadSubset),
+    persistence,
+  } satisfies PersistedSyncWrappedOptions<Todo, string>
+
+  if (params.upstreamLoadSubsetMode === undefined) {
+    return createCollection(
+      persistedCollectionOptions<Todo, string>(baseOptions),
+    )
+  }
+
+  return createCollection(
+    persistedCollectionOptions<Todo, string>({
+      ...baseOptions,
+      upstreamLoadSubsetMode: params.upstreamLoadSubsetMode,
+    }),
+  )
+}
+
+function subscribeAndGetLoadSubsetPromise(
+  collection: Collection<Todo, string>,
+) {
+  let loadSubsetResult: Promise<void> | true | undefined
+  const subscription = collection.subscribeChanges(() => {}, {
+    includeInitialState: true,
+    onLoadSubsetResult: (result) => {
+      loadSubsetResult = result
+    },
+  })
+
+  return {
+    loadSubsetPromise: expectLoadSubsetPromise(loadSubsetResult),
+    subscription,
+  }
 }
 
 describe(`persistedCollectionOptions`, () => {
@@ -1359,6 +1464,151 @@ describe(`persistedCollectionOptions`, () => {
     await flushAsyncWork(120)
 
     expect(ensureCalls).toBeGreaterThanOrEqual(2)
+  })
+
+  it(`keeps upstream loadSubset in the background by default`, async () => {
+    const adapter = createRecordingAdapter()
+    const upstreamLoad = createDeferredVoid()
+    let upstreamLoadCalls = 0
+
+    const collection = createOnDemandPersistedCollection({
+      id: `sync-present-background-load-subset`,
+      adapter,
+      loadSubset: () => {
+        upstreamLoadCalls++
+        return upstreamLoad.promise
+      },
+    })
+
+    const { loadSubsetPromise, subscription } =
+      subscribeAndGetLoadSubsetPromise(collection)
+
+    await loadSubsetPromise
+
+    expect(upstreamLoadCalls).toBe(1)
+    expect(upstreamLoad.isPending()).toBe(true)
+
+    upstreamLoad.resolve()
+    await upstreamLoad.promise
+    subscription.unsubscribe()
+  })
+
+  it(`awaits upstream loadSubset when upstreamLoadSubsetMode is await`, async () => {
+    const adapter = createRecordingAdapter()
+    const upstreamLoad = createDeferredVoid()
+    let upstreamLoadCalls = 0
+
+    const collection = createOnDemandPersistedCollection({
+      id: `sync-present-await-load-subset`,
+      adapter,
+      upstreamLoadSubsetMode: `await`,
+      loadSubset: () => {
+        upstreamLoadCalls++
+        return upstreamLoad.promise
+      },
+    })
+
+    const { loadSubsetPromise, subscription } =
+      subscribeAndGetLoadSubsetPromise(collection)
+    let loadSubsetResolved = false
+    void loadSubsetPromise.then(() => {
+      loadSubsetResolved = true
+    })
+
+    await vi.waitFor(() => expect(upstreamLoadCalls).toBe(1))
+    expect(loadSubsetResolved).toBe(false)
+
+    upstreamLoad.resolve()
+    await loadSubsetPromise
+
+    expect(loadSubsetResolved).toBe(true)
+    subscription.unsubscribe()
+  })
+
+  it(`hydrates SQLite rows before awaited upstream loadSubset resolves`, async () => {
+    const adapter = createRecordingAdapter([
+      { id: `local-1`, title: `Persisted local` },
+    ])
+    const upstreamLoad = createDeferredVoid()
+
+    const collection = createOnDemandPersistedCollection({
+      id: `sync-present-await-local-first`,
+      adapter,
+      upstreamLoadSubsetMode: `await`,
+      loadSubset: () => upstreamLoad.promise,
+    })
+
+    const { loadSubsetPromise, subscription } =
+      subscribeAndGetLoadSubsetPromise(collection)
+    let loadSubsetResolved = false
+    void loadSubsetPromise.then(() => {
+      loadSubsetResolved = true
+    })
+
+    await vi.waitFor(() =>
+      expect(stripVirtualProps(collection.get(`local-1`))).toEqual({
+        id: `local-1`,
+        title: `Persisted local`,
+      }),
+    )
+    expect(loadSubsetResolved).toBe(false)
+    expect(upstreamLoad.isPending()).toBe(true)
+
+    upstreamLoad.resolve()
+    await loadSubsetPromise
+    subscription.unsubscribe()
+  })
+
+  it(`await mode preserves local rows and queues remote ensure on upstream rejection`, async () => {
+    const adapter = createRecordingAdapter([
+      { id: `local-1`, title: `Persisted local` },
+    ])
+    const upstreamLoad = createDeferredVoid()
+    let ensureCalls = 0
+
+    const coordinator: PersistedCollectionCoordinator = {
+      getNodeId: () => `await-reject-node`,
+      subscribe: () => () => {},
+      publish: () => {},
+      isLeader: () => true,
+      ensureLeadership: async () => {},
+      requestEnsurePersistedIndex: async () => {},
+      requestEnsureRemoteSubset: async () => {
+        ensureCalls++
+      },
+    }
+
+    const collection = createOnDemandPersistedCollection({
+      id: `sync-present-await-reject`,
+      adapter,
+      coordinator,
+      upstreamLoadSubsetMode: `await`,
+      loadSubset: () => upstreamLoad.promise,
+    })
+
+    const { loadSubsetPromise, subscription } =
+      subscribeAndGetLoadSubsetPromise(collection)
+
+    await vi.waitFor(() =>
+      expect(stripVirtualProps(collection.get(`local-1`))).toEqual({
+        id: `local-1`,
+        title: `Persisted local`,
+      }),
+    )
+    await vi.waitFor(() => expect(ensureCalls).toBeGreaterThanOrEqual(1))
+    const ensureCallsBeforeReject = ensureCalls
+
+    upstreamLoad.reject(new Error(`upstream failed`))
+    await loadSubsetPromise
+
+    expect(stripVirtualProps(collection.get(`local-1`))).toEqual({
+      id: `local-1`,
+      title: `Persisted local`,
+    })
+    await vi.waitFor(() =>
+      expect(ensureCalls).toBeGreaterThan(ensureCallsBeforeReject),
+    )
+    subscription.unsubscribe()
   })
 
   it(`fails sync-absent persistence when follower ack omits mutation ids`, async () => {

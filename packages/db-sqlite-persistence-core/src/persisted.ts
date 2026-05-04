@@ -347,6 +347,8 @@ export interface PersistedCollectionUtils extends UtilsRecord {
   forceReloadSubset?: (options: LoadSubsetOptions) => Promise<void> | void
 }
 
+export type UpstreamLoadSubsetMode = `background` | `await`
+
 export type PersistedSyncWrappedOptions<
   T extends object,
   TKey extends string | number,
@@ -356,6 +358,7 @@ export type PersistedSyncWrappedOptions<
   sync: SyncConfig<T, TKey>
   persistence: PersistedCollectionPersistence
   schemaVersion?: number
+  upstreamLoadSubsetMode?: UpstreamLoadSubsetMode
 }
 
 export type PersistedLocalOnlyOptions<
@@ -977,6 +980,9 @@ class PersistedCollectionRuntime<
   async loadSubset(
     options: LoadSubsetOptions,
     upstreamLoadSubset?: (options: LoadSubsetOptions) => true | Promise<void>,
+    config: { upstreamLoadSubsetMode: UpstreamLoadSubsetMode } = {
+      upstreamLoadSubsetMode: `background`,
+    },
   ): Promise<void> {
     this.activeSubsets.set(this.getSubsetKey(options), options)
 
@@ -990,15 +996,27 @@ class PersistedCollectionRuntime<
       try {
         const maybePromise = upstreamLoadSubset(options)
         if (maybePromise instanceof Promise) {
-          maybePromise.catch((error) => {
-            console.warn(
-              `Failed to load remote subset in persisted wrapper:`,
-              error,
-            )
-            this.queueRemoteSubsetEnsure(options)
-          })
+          if (config.upstreamLoadSubsetMode === `await`) {
+            try {
+              await maybePromise
+            } catch (error: unknown) {
+              console.warn(
+                `Failed to load remote subset in persisted wrapper:`,
+                error,
+              )
+              this.queueRemoteSubsetEnsure(options)
+            }
+          } else {
+            maybePromise.catch((error: unknown) => {
+              console.warn(
+                `Failed to load remote subset in persisted wrapper:`,
+                error,
+              )
+              this.queueRemoteSubsetEnsure(options)
+            })
+          }
         }
-      } catch (error) {
+      } catch (error: unknown) {
         console.warn(`Failed to trigger remote subset load:`, error)
         this.queueRemoteSubsetEnsure(options)
       }
@@ -2200,6 +2218,7 @@ function createWrappedSyncConfig<
 >(
   sourceSyncConfig: SyncConfig<T, TKey>,
   runtime: PersistedCollectionRuntime<T, TKey>,
+  config: { upstreamLoadSubsetMode: UpstreamLoadSubsetMode },
 ): SyncConfig<T, TKey> {
   return {
     ...sourceSyncConfig,
@@ -2508,7 +2527,11 @@ function createWrappedSyncConfig<
           if (startupState.cleanedUp || cancelledLoadKeys.has(loadKey)) {
             return
           }
-          await runtime.loadSubset(options, resolvedSourceResult.loadSubset)
+          await runtime.loadSubset(
+            options,
+            resolvedSourceResult.loadSubset,
+            config,
+          )
         },
         unloadSubset: (options: LoadSubsetOptions) => {
           cancelledLoadKeys.add(getLoadKey(options))
@@ -2605,7 +2628,11 @@ export function persistedCollectionOptions<
       )
     }
 
-    const { schemaVersion, ...syncOptions } = options
+    const {
+      schemaVersion,
+      upstreamLoadSubsetMode = `background`,
+      ...syncOptions
+    } = options
     const collectionId =
       syncOptions.id ?? `persisted-collection:${crypto.randomUUID()}`
     const persistence = resolvePersistenceForCollection(
@@ -2628,7 +2655,9 @@ export function persistedCollectionOptions<
     return {
       ...syncOptions,
       id: collectionId,
-      sync: createWrappedSyncConfig<T, TKey>(syncOptions.sync, runtime),
+      sync: createWrappedSyncConfig<T, TKey>(syncOptions.sync, runtime, {
+        upstreamLoadSubsetMode,
+      }),
       persistence,
     }
   }
