@@ -119,8 +119,8 @@ mkdir -p _artifacts/release-notion.N
 for p in db react-db query-db-collection offline-transactions \
          browser-db-sqlite-persistence db-sqlite-persistence-core \
          electron-db-sqlite-persistence; do
-  pnpm --filter "@tanstack/$p" pack \
-       --pack-destination "$PWD/_artifacts/release-notion.N"
+  (cd "packages/$p" && pnpm pack \
+       --pack-destination "$PWD/../../_artifacts/release-notion.N")
 done
 ```
 
