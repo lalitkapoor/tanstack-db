@@ -99,7 +99,19 @@ git push origin notion
 git push origin notion.N
 ```
 
-### 4. Pack the 7 packages
+### 4. Build and pack the 7 packages
+
+Build before packing. The package exports point at `dist`, and GitHub release
+tarballs must include those built files for downstream Vite/npm resolution to
+work.
+
+```bash
+for p in db react-db query-db-collection offline-transactions \
+         browser-db-sqlite-persistence db-sqlite-persistence-core \
+         electron-db-sqlite-persistence; do
+  pnpm --filter "@tanstack/$p" build
+done
+```
 
 ```bash
 mkdir -p _artifacts/release-notion.N
@@ -109,6 +121,15 @@ for p in db react-db query-db-collection offline-transactions \
          electron-db-sqlite-persistence; do
   pnpm --filter "@tanstack/$p" pack \
        --pack-destination "$PWD/_artifacts/release-notion.N"
+done
+```
+
+Verify the tarballs contain built entry points:
+
+```bash
+for tgz in _artifacts/release-notion.N/*.tgz; do
+  echo "=== $(basename $tgz) ==="
+  tar -tzf "$tgz" | grep -E 'package/dist/(esm/index\.js|cjs/index\.cjs)' || exit 1
 done
 ```
 
