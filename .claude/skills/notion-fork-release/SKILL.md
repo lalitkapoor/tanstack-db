@@ -35,8 +35,22 @@ External deps on `@tanstack/db-ivm`, `@tanstack/pacer-lite`, `@tanstack/query-co
 
 Confirm with the user:
 1. **Counter `N`** — last release tag is `notion.<previous>`; default to `<previous>+1`. Check via `gh release list --repo lalitkapoor/tanstack-db` or `git tag -l 'notion.*' | sort -V | tail -1`.
-2. **What's already on `notion` branch** — assume the user has already squash-merged the patches they want included. Run `git log upstream/main..notion --oneline` to confirm.
+2. **What's already on `notion` branch** — assume the user has already squash-merged the patches they want included, with the PR number in each squash commit message. Run `git log upstream/main..notion --oneline` to confirm.
 3. **Upstream base version** — read `packages/db/package.json` on `notion` branch. That's the `@tanstack/db` upstream base.
+
+## Merging PR branches into `notion`
+
+When a PR branch needs to be included in the Notion fork release, squash it into
+`notion` instead of creating a merge commit:
+
+```bash
+git switch notion
+git merge --squash <pr-branch>
+git commit -m "<commit subject> (#<PR number>)"
+```
+
+The PR number must be in the commit message so release notes and later branch
+audits can map every Notion fork patch back to the PR it came from.
 
 ## Steps
 
