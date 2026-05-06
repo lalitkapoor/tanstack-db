@@ -253,6 +253,16 @@ export interface PersistenceAdapter {
       metadata?: unknown
     }>
   >
+  loadKeys?: (
+    collectionId: string,
+    keys: ReadonlyArray<string | number>,
+  ) => Promise<
+    Array<{
+      key: string | number
+      value: Record<string, unknown>
+      metadata?: unknown
+    }>
+  >
   applyCommittedTx: (collectionId: string, tx: PersistedTx) => Promise<void>
   loadCollectionMetadata?: (
     collectionId: string,
@@ -708,13 +718,15 @@ function normalizeSubsetOptionsForKey(
   }
 }
 
-function normalizeSyncFnResult(result: void | (() => void) | SyncConfigRes) {
+function normalizeSyncFnResult<TKey extends string | number>(
+  result: void | (() => void) | SyncConfigRes<TKey>,
+): SyncConfigRes<TKey> {
   if (typeof result === `function`) {
-    return { cleanup: result } satisfies SyncConfigRes
+    return { cleanup: result }
   }
 
   if (result === undefined) {
-    return {} satisfies SyncConfigRes
+    return {}
   }
 
   return result
@@ -1013,6 +1025,29 @@ class PersistedCollectionRuntime<
     upstreamUnloadSubset?.(options)
   }
 
+  async loadKey(
+    key: TKey,
+    upstreamLoadKey?: (key: TKey) => true | Promise<void>,
+  ): Promise<void> {
+    await this.applyMutex.run(() => this.hydrateKeyUnsafe(key))
+
+    if (upstreamLoadKey) {
+      try {
+        const maybePromise = upstreamLoadKey(key)
+        if (maybePromise instanceof Promise) {
+          maybePromise.catch((error) => {
+            console.warn(
+              `Failed to load remote key in persisted wrapper:`,
+              error,
+            )
+          })
+        }
+      } catch (error) {
+        console.warn(`Failed to trigger remote key load:`, error)
+      }
+    }
+  }
+
   async forceReloadSubset(options: LoadSubsetOptions): Promise<void> {
     this.activeSubsets.set(this.getSubsetKey(options), options)
     await this.applyMutex.run(() =>
@@ -1183,6 +1218,18 @@ class PersistedCollectionRuntime<
     }) as Promise<Array<{ key: TKey; value: T; metadata?: unknown }>>
   }
 
+  private async loadKeyRowsUnsafe(
+    key: TKey,
+  ): Promise<Array<{ key: TKey; value: T; metadata?: unknown }>> {
+    if (!this.persistence.adapter.loadKeys) {
+      return []
+    }
+
+    return this.persistence.adapter.loadKeys(this.collectionId, [
+      key,
+    ]) as Promise<Array<{ key: TKey; value: T; metadata?: unknown }>>
+  }
+
   private async scanPersistedRowsUnsafe(
     options?: PersistedRowScanOptions,
   ): Promise<Array<PersistedScannedRow<T, TKey>>> {
@@ -1223,6 +1270,20 @@ class PersistedCollectionRuntime<
     if (config.requestRemoteEnsure) {
       this.queueRemoteSubsetEnsure(options)
     }
+  }
+
+  private async hydrateKeyUnsafe(key: TKey): Promise<void> {
+    this.isHydrating = true
+    try {
+      const rows = await this.loadKeyRowsUnsafe(key)
+
+      this.applyRowsToCollection(rows)
+    } finally {
+      this.isHydrating = false
+    }
+
+    await this.flushQueuedHydrationTransactionsUnsafe()
+    await this.flushQueuedTxCommittedUnsafe()
   }
 
   private applyRowsToCollection(
@@ -2477,7 +2538,7 @@ function createWrappedSyncConfig<
         },
       }
 
-      let sourceResult: SyncConfigRes = {}
+      let sourceResult: SyncConfigRes<TKey> = {}
       const startupState = { cleanedUp: false }
       fullStartPromise = runtime.ensureStarted()
       const sourceResultPromise = (async () => {
@@ -2513,6 +2574,14 @@ function createWrappedSyncConfig<
         unloadSubset: (options: LoadSubsetOptions) => {
           cancelledLoadKeys.add(getLoadKey(options))
           runtime.unloadSubset(options, sourceResult.unloadSubset)
+        },
+        loadKey: async (key: TKey) => {
+          await fullStartPromise
+          const resolvedSourceResult = await sourceResultPromise
+          if (startupState.cleanedUp) {
+            return
+          }
+          await runtime.loadKey(key, resolvedSourceResult.loadKey)
         },
       }
     },
@@ -2554,6 +2623,7 @@ function createLoopbackSyncConfig<
         loadSubset: (options: LoadSubsetOptions) => runtime.loadSubset(options),
         unloadSubset: (options: LoadSubsetOptions) =>
           runtime.unloadSubset(options),
+        loadKey: (key: TKey) => runtime.loadKey(key),
       }
     },
     getSyncMetadata: () => ({

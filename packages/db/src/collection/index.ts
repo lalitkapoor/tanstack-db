@@ -300,6 +300,8 @@ export class CollectionImpl<
   // and for debugging
   public _state: CollectionStateManager<TOutput, TKey, TSchema, TInput>
 
+  private pendingKeyLoads = new Map<TKey, Promise<void>>()
+
   /**
    * When set, collection consumers should defer processing incoming data
    * refreshes until this promise resolves. This prevents stale data from
@@ -891,6 +893,39 @@ export class CollectionImpl<
   }
 
   /**
+   * Requests a single collection key from the sync layer.
+   *
+   * This is a direct key-based load. It does not compile a query, subscribe to a
+   * live query collection, create a dataflow, or retain the key. Mounted row
+   * subscribers keep the collection active through normal subscription GC.
+   */
+  public loadKey(key: TKey): Promise<void> | true {
+    const currentLoad = this.pendingKeyLoads.get(key)
+    if (currentLoad) {
+      return currentLoad
+    }
+
+    const result = this._sync.loadKey(key)
+    if (result !== true) {
+      this.pendingKeyLoads.set(key, result)
+      void result.then(
+        () => {
+          if (this.pendingKeyLoads.get(key) === result) {
+            this.pendingKeyLoads.delete(key)
+          }
+        },
+        () => {
+          if (this.pendingKeyLoads.get(key) === result) {
+            this.pendingKeyLoads.delete(key)
+          }
+        },
+      )
+    }
+
+    return result
+  }
+
+  /**
    * Subscribe to changes in the collection
    * @param callback - Function called when items change
    * @param options - Subscription options including includeInitialState and where filter
@@ -942,6 +977,33 @@ export class CollectionImpl<
   }
 
   /**
+   * Subscribe to future changes for a single collection key.
+   *
+   * This does not emit the current row. Use collection.get(key) to read the
+   * current value, then subscribeKeyChanges(key, callback) to react to future
+   * inserts, updates, and deletes for that key.
+   *
+   * @example
+   * const currentTodo = todos.get("todo-1")
+   *
+   * const subscription = todos.subscribeKeyChanges("todo-1", (changes) => {
+   *   for (const change of changes) {
+   *     console.log(change.type, change.value)
+   *   }
+   * })
+   *
+   * // Later: subscription.unsubscribe()
+   */
+  public subscribeKeyChanges(
+    key: TKey,
+    callback: (
+      changes: Array<ChangeMessage<WithVirtualProps<TOutput, TKey>, TKey>>,
+    ) => void,
+  ): CollectionSubscription {
+    return this._changes.subscribeKeyChanges(key, callback)
+  }
+
+  /**
    * Subscribe to a collection event
    */
   public on<T extends keyof AllCollectionEvents>(
@@ -986,6 +1048,7 @@ export class CollectionImpl<
    * This can be called manually or automatically by garbage collection
    */
   public async cleanup(): Promise<void> {
+    this.pendingKeyLoads.clear()
     this._lifecycle.cleanup()
     return Promise.resolve()
   }

@@ -317,12 +317,17 @@ export type LoadSubsetFn = (options: LoadSubsetOptions) => true | Promise<void>
 
 export type UnloadSubsetFn = (options: LoadSubsetOptions) => void
 
+export type LoadKeyFn<TKey extends string | number = string | number> = (
+  key: TKey,
+) => true | Promise<void>
+
 export type CleanupFn = () => void
 
-export type SyncConfigRes = {
+export type SyncConfigRes<TKey extends string | number = string | number> = {
   cleanup?: CleanupFn
   loadSubset?: LoadSubsetFn
   unloadSubset?: UnloadSubsetFn
+  loadKey?: LoadKeyFn<TKey>
 }
 export interface SyncConfig<
   T extends object = Record<string, unknown>,
@@ -341,7 +346,7 @@ export interface SyncConfig<
     markReady: () => void
     truncate: () => void
     metadata?: SyncMetadataApi<TKey>
-  }) => void | CleanupFn | SyncConfigRes
+  }) => void | CleanupFn | SyncConfigRes<TKey>
 
   /**
    * Get the sync metadata for insert operations

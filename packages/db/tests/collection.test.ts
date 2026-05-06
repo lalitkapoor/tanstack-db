@@ -1,6 +1,7 @@
 import mitt from 'mitt'
 import { describe, expect, it, vi } from 'vitest'
 import { createCollection } from '../src/collection/index.js'
+import { createDeferred } from '../src/deferred'
 import {
   CollectionRequiresConfigError,
   DuplicateKeyError,
@@ -1927,6 +1928,91 @@ describe(`Collection`, () => {
 })
 
 describe(`Collection isLoadingSubset property`, () => {
+  it(`loadKey requests a key without a query`, () => {
+    const loadKeyCalls: Array<string> = []
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return true
+            },
+          }
+        },
+      },
+    })
+
+    expect(collection.loadKey(`a`)).toBe(true)
+    expect(loadKeyCalls).toEqual([`a`])
+  })
+
+  it(`loadKey deduplicates repeated in-flight key loads`, async () => {
+    const loadKeyDeferred = createDeferred<void>()
+    const loadKeyCalls: Array<string> = []
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return loadKeyDeferred.promise
+            },
+          }
+        },
+      },
+    })
+
+    const firstLoad = collection.loadKey(`a`)
+    const secondLoad = collection.loadKey(`a`)
+
+    expect(secondLoad).toBe(firstLoad)
+    expect(loadKeyCalls).toEqual([`a`])
+
+    loadKeyDeferred.resolve()
+    await flushPromises()
+
+    collection.loadKey(`a`)
+    expect(loadKeyCalls).toEqual([`a`, `a`])
+  })
+
+  it(`loadKey tracks loadingSubset state`, async () => {
+    const loadKeyDeferred = createDeferred<void>()
+
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: () => loadKeyDeferred.promise,
+          }
+        },
+      },
+    })
+
+    collection.loadKey(`a`)
+    expect(collection.isLoadingSubset).toBe(true)
+
+    loadKeyDeferred.resolve()
+    await flushPromises()
+
+    expect(collection.isLoadingSubset).toBe(false)
+  })
+
   it(`isLoadingSubset is false initially`, () => {
     const collection = createCollection<{ id: string; value: string }>({
       id: `test`,

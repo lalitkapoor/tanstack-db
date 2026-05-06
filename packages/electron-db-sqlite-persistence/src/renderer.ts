@@ -151,6 +151,16 @@ function createRendererRequestExecutor(options: {
 
 type ElectronRendererResolvedAdapter =
   PersistedCollectionPersistence[`adapter`] & {
+    loadKeys: (
+      collectionId: string,
+      keys: ReadonlyArray<string | number>,
+    ) => Promise<
+      Array<{
+        key: string | number
+        value: Record<string, unknown>
+        metadata?: unknown
+      }>
+    >
     loadCollectionMetadata: (
       collectionId: string,
     ) => Promise<Array<{ key: string; value: unknown }>>
@@ -198,6 +208,30 @@ function createResolvedRendererAdapter(
       return result as Array<{
         key: string | number
         value: Record<string, unknown>
+      }>
+    },
+    loadKeys: async (
+      collectionId: string,
+      keys: ReadonlyArray<string | number>,
+    ): Promise<
+      Array<{
+        key: string | number
+        value: Record<string, unknown>
+        metadata?: unknown
+      }>
+    > => {
+      const result = await executeRequest(
+        `loadKeys`,
+        collectionId,
+        {
+          keys,
+        },
+        resolution,
+      )
+      return result as Array<{
+        key: string | number
+        value: Record<string, unknown>
+        metadata?: unknown
       }>
     },
     applyCommittedTx: async (

@@ -120,6 +120,25 @@ async function executeRequestAgainstAdapter(
       }
     }
 
+    case `loadKeys`: {
+      if (!adapter.loadKeys) {
+        throw new InvalidPersistedCollectionConfigError(
+          `loadKeys is not supported by the configured electron persistence adapter`,
+        )
+      }
+      const result = await adapter.loadKeys(
+        request.collectionId,
+        request.payload.keys,
+      )
+      return {
+        v: ELECTRON_PERSISTENCE_PROTOCOL_VERSION,
+        requestId: request.requestId,
+        method: request.method,
+        ok: true,
+        result,
+      }
+    }
+
     case `loadCollectionMetadata`: {
       if (!adapter.loadCollectionMetadata) {
         throw new InvalidPersistedCollectionConfigError(

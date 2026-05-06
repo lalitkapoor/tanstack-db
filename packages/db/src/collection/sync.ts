@@ -15,6 +15,7 @@ import type {
   ChangeMessageOrDeleteKeyMessage,
   CleanupFn,
   CollectionConfig,
+  LoadKeyFn,
   LoadSubsetOptions,
   OptimisticChangeMessage,
   SyncConfigRes,
@@ -47,6 +48,7 @@ export class CollectionSyncManager<
     | null = null
   public syncUnloadSubsetFn: ((options: LoadSubsetOptions) => void) | null =
     null
+  public syncLoadKeyFn: LoadKeyFn<TKey> | null = null
 
   private pendingLoadSubsetPromises: Set<Promise<void>> = new Set()
 
@@ -258,11 +260,18 @@ export class CollectionSyncManager<
       // Store unloadSubset function if provided
       this.syncUnloadSubsetFn = syncRes?.unloadSubset ?? null
 
-      // Validate: on-demand mode requires a loadSubset function
-      if (this.syncMode === `on-demand` && !this.syncLoadSubsetFn) {
+      // Store loadKey function if provided
+      this.syncLoadKeyFn = syncRes?.loadKey ?? null
+
+      // Validate: on-demand mode requires at least one manual loading function
+      if (
+        this.syncMode === `on-demand` &&
+        !this.syncLoadSubsetFn &&
+        !this.syncLoadKeyFn
+      ) {
         throw new CollectionConfigurationError(
-          `Collection "${this.id}" is configured with syncMode "on-demand" but the sync function did not return a loadSubset handler. ` +
-            `Either provide a loadSubset handler or use syncMode "eager".`,
+          `Collection "${this.id}" is configured with syncMode "on-demand" but the sync function did not return a loadSubset or loadKey handler. ` +
+            `Either provide a manual loading handler or use syncMode "eager".`,
         )
       }
     } catch (error) {
@@ -507,6 +516,28 @@ export class CollectionSyncManager<
     }
   }
 
+  /**
+   * Requests the sync layer to load one collection key directly.
+   * @param key Collection key to load
+   * @returns If key loading is asynchronous, this method returns a promise that resolves when the data is loaded.
+   *          Returns true if no key-loading function is configured, if syncMode is 'eager', or if there is no work to do.
+   */
+  public loadKey(key: TKey): Promise<void> | true {
+    if (this.syncMode === `eager`) {
+      return true
+    }
+
+    if (this.syncLoadKeyFn) {
+      const result = this.syncLoadKeyFn(key)
+      if (result !== true) {
+        this.trackLoadPromise(result)
+        return result
+      }
+    }
+
+    return true
+  }
+
   public cleanup(): void {
     try {
       if (this.syncCleanupFn) {
@@ -531,7 +562,9 @@ export class CollectionSyncManager<
   }
 }
 
-function normalizeSyncFnResult(result: void | CleanupFn | SyncConfigRes) {
+function normalizeSyncFnResult<TKey extends string | number>(
+  result: void | CleanupFn | SyncConfigRes<TKey>,
+): SyncConfigRes<TKey> | undefined {
   if (typeof result === `function`) {
     return { cleanup: result }
   }
