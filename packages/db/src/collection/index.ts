@@ -300,6 +300,11 @@ export class CollectionImpl<
   // and for debugging
   public _state: CollectionStateManager<TOutput, TKey, TSchema, TInput>
 
+  private keyLoads = new Map<
+    TKey,
+    { count: number; result: Promise<void> | true }
+  >()
+
   /**
    * When set, collection consumers should defer processing incoming data
    * refreshes until this promise resolves. This prevents stale data from
@@ -891,6 +896,42 @@ export class CollectionImpl<
   }
 
   /**
+   * Requests a single collection key from the sync layer.
+   *
+   * This is a direct key-based load. It does not compile a query, subscribe to a
+   * live query collection, or create a dataflow.
+   */
+  public loadKey(key: TKey): Promise<void> | true {
+    const currentLoad = this.keyLoads.get(key)
+    if (currentLoad) {
+      currentLoad.count++
+      return currentLoad.result
+    }
+
+    const result = this._sync.loadKey(key)
+    this.keyLoads.set(key, { count: 1, result })
+    return result
+  }
+
+  /**
+   * Notifies the sync layer that a directly loaded key is no longer needed.
+   */
+  public unloadKey(key: TKey): void {
+    const currentLoad = this.keyLoads.get(key)
+    if (!currentLoad) {
+      return
+    }
+
+    if (currentLoad.count > 1) {
+      currentLoad.count--
+      return
+    }
+
+    this.keyLoads.delete(key)
+    this._sync.unloadKey(key)
+  }
+
+  /**
    * Subscribe to changes in the collection
    * @param callback - Function called when items change
    * @param options - Subscription options including includeInitialState and where filter
@@ -1013,6 +1054,7 @@ export class CollectionImpl<
    * This can be called manually or automatically by garbage collection
    */
   public async cleanup(): Promise<void> {
+    this.keyLoads.clear()
     this._lifecycle.cleanup()
     return Promise.resolve()
   }

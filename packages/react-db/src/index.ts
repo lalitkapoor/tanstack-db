@@ -1,6 +1,6 @@
 // Re-export all public APIs
 export * from './useLiveQuery'
-export * from './useCollectionRecord'
+export * from './useLiveRow'
 export * from './useLiveSuspenseQuery'
 export * from './usePacedMutations'
 export * from './useLiveInfiniteQuery'

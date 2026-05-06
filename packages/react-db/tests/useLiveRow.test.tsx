@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { createCollection } from '@tanstack/db'
-import { useCollectionRecord } from '../src/useCollectionRecord'
+import { useLiveRow } from '../src/useLiveRow'
 import { mockSyncCollectionOptions } from '../../db/tests/utils'
 
 type Person = {
@@ -38,12 +38,12 @@ function createPersonsCollection() {
   )
 }
 
-describe(`useCollectionRecord`, () => {
+describe(`useLiveRow`, () => {
   it(`returns the current record for a collection key`, async () => {
     const collection = createPersonsCollection()
 
     const { result } = renderHook(() =>
-      useCollectionRecord(collection, `2`),
+      useLiveRow(collection, `2`),
     )
 
     await waitFor(() => {
@@ -62,7 +62,7 @@ describe(`useCollectionRecord`, () => {
 
     const { result } = renderHook(() => {
       renderCount += 1
-      return useCollectionRecord(collection, `2`)
+      return useLiveRow(collection, `2`)
     })
 
     await waitFor(() => {
@@ -100,7 +100,7 @@ describe(`useCollectionRecord`, () => {
     const { result, rerender } = renderHook(
       ({ personId }: { personId: string }) => {
         renderCount += 1
-        return useCollectionRecord(collection, personId)
+        return useLiveRow(collection, personId)
       },
       { initialProps: { personId: `1` } },
     )
@@ -134,6 +134,79 @@ describe(`useCollectionRecord`, () => {
 
     await waitFor(() => {
       expect(result.current.data?.name).toBe(`Changed Smith`)
+    })
+  })
+
+  it(`loads and unloads the collection key while subscribed`, async () => {
+    const loadKeyCalls: Array<string> = []
+    const unloadKeyCalls: Array<string> = []
+    const collection = createCollection<Person, string>({
+      id: `test-persons-on-demand`,
+      getKey: (person) => person.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return true
+            },
+            unloadKey: (key) => {
+              unloadKeyCalls.push(key)
+            },
+          }
+        },
+      },
+    })
+
+    const { unmount } = renderHook(() =>
+      useLiveRow(collection, `2`),
+    )
+
+    await waitFor(() => {
+      expect(loadKeyCalls).toEqual([`2`])
+    })
+
+    unmount()
+    expect(unloadKeyCalls).toEqual([`2`])
+  })
+
+  it(`renders a missing record after loadKey writes it`, async () => {
+    const collection = createCollection<Person, string>({
+      id: `test-persons-load-missing`,
+      getKey: (person) => person.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ begin, commit, markReady, write }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              if (key !== `2`) {
+                return true
+              }
+
+              begin()
+              write({
+                type: `insert`,
+                value: initialPersons[1]!,
+              })
+              commit()
+              return true
+            },
+          }
+        },
+      },
+    })
+
+    const { result } = renderHook(() =>
+      useLiveRow(collection, `2`),
+    )
+
+    await waitFor(() => {
+      expect(result.current.data?.name).toBe(`Jane Doe`)
     })
   })
 })

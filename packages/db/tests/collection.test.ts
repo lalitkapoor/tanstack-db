@@ -17,7 +17,11 @@ import {
   stripVirtualProps,
   withExpectedRejection,
 } from './utils'
-import type { ChangeMessage, MutationFn, PendingMutation } from '../src/types'
+import type {
+  ChangeMessage,
+  MutationFn,
+  PendingMutation,
+} from '../src/types'
 
 const getStateValue = <T extends object, TKey extends string | number>(
   collection: { state: Map<TKey, T> },
@@ -1927,6 +1931,105 @@ describe(`Collection`, () => {
 })
 
 describe(`Collection isLoadingSubset property`, () => {
+  it(`loadKey requests a key without a query`, () => {
+    const loadKeyCalls: Array<string> = []
+    const unloadKeyCalls: Array<string> = []
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return true
+            },
+            unloadKey: (key) => {
+              unloadKeyCalls.push(key)
+            },
+          }
+        },
+      },
+    })
+
+    expect(collection.loadKey(`a`)).toBe(true)
+    expect(loadKeyCalls).toEqual([`a`])
+
+    collection.unloadKey(`a`)
+    expect(unloadKeyCalls).toEqual([`a`])
+  })
+
+  it(`loadKey reference-counts repeated key loads`, () => {
+    const loadKeyPromise = new Promise<void>(() => {})
+    const loadKeyCalls: Array<string> = []
+    const unloadKeyCalls: Array<string> = []
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return loadKeyPromise
+            },
+            unloadKey: (key) => {
+              unloadKeyCalls.push(key)
+            },
+          }
+        },
+      },
+    })
+
+    const firstLoad = collection.loadKey(`a`)
+    const secondLoad = collection.loadKey(`a`)
+
+    expect(secondLoad).toBe(firstLoad)
+    expect(loadKeyCalls).toEqual([`a`])
+
+    collection.unloadKey(`a`)
+    expect(unloadKeyCalls).toEqual([])
+
+    collection.unloadKey(`a`)
+    expect(unloadKeyCalls).toEqual([`a`])
+  })
+
+  it(`loadKey tracks loadingSubset state`, async () => {
+    let resolveLoadKey: () => void
+    const loadKeyPromise = new Promise<void>((resolve) => {
+      resolveLoadKey = resolve
+    })
+
+    const collection = createCollection<{ id: string; value: string }, string>({
+      id: `test`,
+      getKey: (item) => item.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ markReady }) => {
+          markReady()
+          return {
+            loadKey: () => loadKeyPromise,
+          }
+        },
+      },
+    })
+
+    collection.loadKey(`a`)
+    expect(collection.isLoadingSubset).toBe(true)
+
+    resolveLoadKey!()
+    await flushPromises()
+
+    expect(collection.isLoadingSubset).toBe(false)
+  })
+
   it(`isLoadingSubset is false initially`, () => {
     const collection = createCollection<{ id: string; value: string }>({
       id: `test`,

@@ -71,6 +71,24 @@ describe(`Collection.subscribeKeyChanges type tests`, () => {
   })
 })
 
+describe(`Collection.loadKey type tests`, () => {
+  type TypeTestItem = { id: string; value: number }
+
+  const testCollection = createCollection<TypeTestItem, string>({
+    getKey: (item) => item.id,
+    sync: { sync: () => {} },
+  })
+
+  it(`should accept the collection key type`, () => {
+    expectTypeOf(testCollection.loadKey(`id1`)).toEqualTypeOf<
+      Promise<void> | true
+    >()
+    expectTypeOf(testCollection.unloadKey(`id1`)).toEqualTypeOf<void>()
+    // @ts-expect-error - This collection is keyed by string, not number.
+    testCollection.loadKey(1)
+  })
+})
+
 describe(`Collection type resolution tests`, () => {
   // Define test types
   type ExplicitType = { id: string; explicit: boolean }

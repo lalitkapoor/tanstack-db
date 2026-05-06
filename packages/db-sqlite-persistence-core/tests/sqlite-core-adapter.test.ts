@@ -358,6 +358,68 @@ export function runSQLiteCoreAdapterContractSuite(
       expect(tombstoneRows[0]?.row_version).toBe(3)
     })
 
+    it(`loads persisted rows by collection key`, async () => {
+      const { adapter } = registerContractHarness()
+      const collectionId = `key-load`
+
+      await adapter.applyCommittedTx(collectionId, {
+        txId: `key-load-1`,
+        term: 1,
+        seq: 1,
+        rowVersion: 1,
+        mutations: [
+          {
+            type: `insert`,
+            key: `1`,
+            value: {
+              id: `1`,
+              title: `First`,
+              createdAt: `2026-01-01T00:00:00.000Z`,
+              score: 10,
+            },
+          },
+          {
+            type: `insert`,
+            key: `2`,
+            value: {
+              id: `2`,
+              title: `Second`,
+              createdAt: `2026-01-02T00:00:00.000Z`,
+              score: 20,
+            },
+          },
+          {
+            type: `insert`,
+            key: `3`,
+            value: {
+              id: `3`,
+              title: `Third`,
+              createdAt: `2026-01-03T00:00:00.000Z`,
+              score: 30,
+            },
+          },
+        ],
+      })
+
+      if (!adapter.loadKeys) {
+        throw new Error(`Expected adapter to support key loading`)
+      }
+
+      const rows = await adapter.loadKeys(collectionId, [`2`, `missing`])
+
+      expect(rows).toEqual([
+        {
+          key: `2`,
+          value: {
+            id: `2`,
+            title: `Second`,
+            createdAt: `2026-01-02T00:00:00.000Z`,
+            score: 20,
+          },
+        },
+      ])
+    })
+
     it(`rolls back partially applied mutations when transaction fails`, async () => {
       const { adapter, driver } = registerContractHarness()
       const collectionId = `atomicity`

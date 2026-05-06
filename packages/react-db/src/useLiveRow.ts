@@ -5,13 +5,13 @@ import type {
   UtilsRecord,
 } from '@tanstack/db'
 
-type CollectionRecordSnapshot<TRecord extends object> = {
+type LiveRowSnapshot<TRecord extends object> = {
   data: TRecord | undefined
   status: CollectionStatus
   version: number
 }
 
-export type UseCollectionRecordResult<
+export type UseLiveRowResult<
   TRecord extends object,
   TKey extends string | number,
   TUtils extends UtilsRecord = UtilsRecord,
@@ -28,30 +28,29 @@ export type UseCollectionRecordResult<
 }
 
 /**
- * Subscribe to one collection record by key without compiling a live query graph.
+ * Subscribe to one live collection row by key without compiling a query graph.
  *
  * This is the point-read counterpart to useLiveQuery: useLiveQuery should own
  * list/query/projection semantics, while this hook owns row rendering by key.
  */
-export function useCollectionRecord<
+export function useLiveRow<
   TRecord extends object,
   TKey extends string | number,
   TUtils extends UtilsRecord = UtilsRecord,
 >(
   collection: Collection<TRecord, TKey, TUtils>,
   key: TKey,
-): UseCollectionRecordResult<TRecord, TKey, TUtils> {
+): UseLiveRowResult<TRecord, TKey, TUtils> {
   const versionRef = useRef(0)
   const sourceRef = useRef<{
     collection: Collection<TRecord, TKey, TUtils>
     key: TKey
   } | null>(null)
-  const snapshotRef =
-    useRef<CollectionRecordSnapshot<TRecord> | null>(null)
+  const snapshotRef = useRef<LiveRowSnapshot<TRecord> | null>(null)
   const returnedSnapshotRef =
-    useRef<CollectionRecordSnapshot<TRecord> | null>(null)
+    useRef<LiveRowSnapshot<TRecord> | null>(null)
   const returnedRef =
-    useRef<UseCollectionRecordResult<TRecord, TKey, TUtils> | null>(null)
+    useRef<UseLiveRowResult<TRecord, TKey, TUtils> | null>(null)
 
   if (
     sourceRef.current?.collection !== collection ||
@@ -73,12 +72,14 @@ export function useCollectionRecord<
 
       const subscription = collection.subscribeKeyChanges(key, notify)
       const unsubscribeStatus = collection.on(`status:change`, notify)
+      void collection.loadKey(key)
 
       // Refresh once after subscribing so changes that land between the
       // render-time read and the subscription attach are reflected.
       notify()
 
       return () => {
+        collection.unloadKey(key)
         subscription.unsubscribe()
         unsubscribeStatus()
       }
@@ -86,7 +87,7 @@ export function useCollectionRecord<
     [collection, key],
   )
 
-  const getSnapshot = useCallback((): CollectionRecordSnapshot<TRecord> => {
+  const getSnapshot = useCallback((): LiveRowSnapshot<TRecord> => {
     const version = versionRef.current
     const data = collection.get(key)
     const status = collection.status

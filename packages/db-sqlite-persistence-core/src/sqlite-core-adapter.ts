@@ -1144,6 +1144,29 @@ export class SQLiteCorePersistenceAdapter implements PersistenceAdapter {
     }))
   }
 
+  async loadKeys(
+    collectionId: string,
+    keys: ReadonlyArray<string | number>,
+  ): Promise<
+    Array<{
+      key: string | number
+      value: Record<string, unknown>
+      metadata?: unknown
+    }>
+  > {
+    if (keys.length === 0) {
+      return []
+    }
+
+    const tableMapping = await this.ensureCollectionReady(collectionId)
+    const rows = await this.loadKeysInternal(tableMapping, keys)
+    return rows.map((row) => ({
+      key: row.key,
+      value: row.value,
+      metadata: row.metadata,
+    }))
+  }
+
   async applyCommittedTx(collectionId: string, tx: PersistedTx): Promise<void> {
     const tableMapping = await this.ensureCollectionReady(collectionId)
     const collectionTableSql = quoteIdentifier(tableMapping.tableName)
@@ -1681,6 +1704,21 @@ export class SQLiteCorePersistenceAdapter implements PersistenceAdapter {
       options.limit,
       options.offset,
     )
+  }
+
+  private async loadKeysInternal(
+    tableMapping: CollectionTableMapping,
+    keys: ReadonlyArray<string | number>,
+  ): Promise<Array<InMemoryRow<string | number, Record<string, unknown>>>> {
+    const collectionTableSql = quoteIdentifier(tableMapping.tableName)
+    const placeholders = keys.map(() => `?`).join(`, `)
+    const storedRows = await this.driver.query<StoredSqliteRow>(
+      `SELECT key, value, metadata, row_version
+       FROM ${collectionTableSql}
+       WHERE key IN (${placeholders})`,
+      keys.map((key) => encodePersistedStorageKey(key)),
+    )
+    return decodeStoredSqliteRows(storedRows)
   }
 
   private applyInMemoryWhere(
