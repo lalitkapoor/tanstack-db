@@ -13,6 +13,14 @@ test(`renderer persistence requires invoke transport`, () => {
           ok: true,
           result: [],
         })
+      case `loadKeys`:
+        return Promise.resolve({
+          v: 1,
+          requestId: request.requestId,
+          method: request.method,
+          ok: true,
+          result: [],
+        })
       case `pullSince`:
         return Promise.resolve({
           v: 1,

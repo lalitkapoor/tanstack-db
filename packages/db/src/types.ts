@@ -321,10 +321,6 @@ export type LoadKeyFn<TKey extends string | number = string | number> = (
   key: TKey,
 ) => true | Promise<void>
 
-export type UnloadKeyFn<TKey extends string | number = string | number> = (
-  key: TKey,
-) => void
-
 export type CleanupFn = () => void
 
 export type SyncConfigRes<TKey extends string | number = string | number> = {
@@ -332,7 +328,6 @@ export type SyncConfigRes<TKey extends string | number = string | number> = {
   loadSubset?: LoadSubsetFn
   unloadSubset?: UnloadSubsetFn
   loadKey?: LoadKeyFn<TKey>
-  unloadKey?: UnloadKeyFn<TKey>
 }
 export interface SyncConfig<
   T extends object = Record<string, unknown>,

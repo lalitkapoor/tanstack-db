@@ -1,9 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react'
-import type {
-  Collection,
-  CollectionStatus,
-  UtilsRecord,
-} from '@tanstack/db'
+import type { Collection, CollectionStatus, UtilsRecord } from '@tanstack/db'
 
 type LiveRowSnapshot<TRecord extends object> = {
   data: TRecord | undefined
@@ -47,10 +43,10 @@ export function useLiveRow<
     key: TKey
   } | null>(null)
   const snapshotRef = useRef<LiveRowSnapshot<TRecord> | null>(null)
-  const returnedSnapshotRef =
-    useRef<LiveRowSnapshot<TRecord> | null>(null)
-  const returnedRef =
-    useRef<UseLiveRowResult<TRecord, TKey, TUtils> | null>(null)
+  const returnedSnapshotRef = useRef<LiveRowSnapshot<TRecord> | null>(null)
+  const returnedRef = useRef<UseLiveRowResult<TRecord, TKey, TUtils> | null>(
+    null,
+  )
 
   if (
     sourceRef.current?.collection !== collection ||
@@ -72,14 +68,15 @@ export function useLiveRow<
 
       const subscription = collection.subscribeKeyChanges(key, notify)
       const unsubscribeStatus = collection.on(`status:change`, notify)
-      void collection.loadKey(key)
+      if (!collection.has(key)) {
+        void collection.loadKey(key)
+      }
 
       // Refresh once after subscribing so changes that land between the
       // render-time read and the subscription attach are reflected.
       notify()
 
       return () => {
-        collection.unloadKey(key)
         subscription.unsubscribe()
         unsubscribeStatus()
       }

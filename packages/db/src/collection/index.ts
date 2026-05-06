@@ -300,10 +300,7 @@ export class CollectionImpl<
   // and for debugging
   public _state: CollectionStateManager<TOutput, TKey, TSchema, TInput>
 
-  private keyLoads = new Map<
-    TKey,
-    { count: number; result: Promise<void> | true }
-  >()
+  private pendingKeyLoads = new Map<TKey, Promise<void>>()
 
   /**
    * When set, collection consumers should defer processing incoming data
@@ -899,36 +896,33 @@ export class CollectionImpl<
    * Requests a single collection key from the sync layer.
    *
    * This is a direct key-based load. It does not compile a query, subscribe to a
-   * live query collection, or create a dataflow.
+   * live query collection, create a dataflow, or retain the key. Mounted row
+   * subscribers keep the collection active through normal subscription GC.
    */
   public loadKey(key: TKey): Promise<void> | true {
-    const currentLoad = this.keyLoads.get(key)
+    const currentLoad = this.pendingKeyLoads.get(key)
     if (currentLoad) {
-      currentLoad.count++
-      return currentLoad.result
+      return currentLoad
     }
 
     const result = this._sync.loadKey(key)
-    this.keyLoads.set(key, { count: 1, result })
+    if (result !== true) {
+      this.pendingKeyLoads.set(key, result)
+      void result.then(
+        () => {
+          if (this.pendingKeyLoads.get(key) === result) {
+            this.pendingKeyLoads.delete(key)
+          }
+        },
+        () => {
+          if (this.pendingKeyLoads.get(key) === result) {
+            this.pendingKeyLoads.delete(key)
+          }
+        },
+      )
+    }
+
     return result
-  }
-
-  /**
-   * Notifies the sync layer that a directly loaded key is no longer needed.
-   */
-  public unloadKey(key: TKey): void {
-    const currentLoad = this.keyLoads.get(key)
-    if (!currentLoad) {
-      return
-    }
-
-    if (currentLoad.count > 1) {
-      currentLoad.count--
-      return
-    }
-
-    this.keyLoads.delete(key)
-    this._sync.unloadKey(key)
   }
 
   /**
@@ -1054,7 +1048,7 @@ export class CollectionImpl<
    * This can be called manually or automatically by garbage collection
    */
   public async cleanup(): Promise<void> {
-    this.keyLoads.clear()
+    this.pendingKeyLoads.clear()
     this._lifecycle.cleanup()
     return Promise.resolve()
   }

@@ -1,6 +1,7 @@
 import mitt from 'mitt'
 import { describe, expect, it, vi } from 'vitest'
 import { createCollection } from '../src/collection/index.js'
+import { createDeferred } from '../src/deferred'
 import {
   CollectionRequiresConfigError,
   DuplicateKeyError,
@@ -17,11 +18,7 @@ import {
   stripVirtualProps,
   withExpectedRejection,
 } from './utils'
-import type {
-  ChangeMessage,
-  MutationFn,
-  PendingMutation,
-} from '../src/types'
+import type { ChangeMessage, MutationFn, PendingMutation } from '../src/types'
 
 const getStateValue = <T extends object, TKey extends string | number>(
   collection: { state: Map<TKey, T> },
@@ -1933,7 +1930,6 @@ describe(`Collection`, () => {
 describe(`Collection isLoadingSubset property`, () => {
   it(`loadKey requests a key without a query`, () => {
     const loadKeyCalls: Array<string> = []
-    const unloadKeyCalls: Array<string> = []
     const collection = createCollection<{ id: string; value: string }, string>({
       id: `test`,
       getKey: (item) => item.id,
@@ -1947,9 +1943,6 @@ describe(`Collection isLoadingSubset property`, () => {
               loadKeyCalls.push(key)
               return true
             },
-            unloadKey: (key) => {
-              unloadKeyCalls.push(key)
-            },
           }
         },
       },
@@ -1957,15 +1950,11 @@ describe(`Collection isLoadingSubset property`, () => {
 
     expect(collection.loadKey(`a`)).toBe(true)
     expect(loadKeyCalls).toEqual([`a`])
-
-    collection.unloadKey(`a`)
-    expect(unloadKeyCalls).toEqual([`a`])
   })
 
-  it(`loadKey reference-counts repeated key loads`, () => {
-    const loadKeyPromise = new Promise<void>(() => {})
+  it(`loadKey deduplicates repeated in-flight key loads`, async () => {
+    const loadKeyDeferred = createDeferred<void>()
     const loadKeyCalls: Array<string> = []
-    const unloadKeyCalls: Array<string> = []
     const collection = createCollection<{ id: string; value: string }, string>({
       id: `test`,
       getKey: (item) => item.id,
@@ -1977,10 +1966,7 @@ describe(`Collection isLoadingSubset property`, () => {
           return {
             loadKey: (key) => {
               loadKeyCalls.push(key)
-              return loadKeyPromise
-            },
-            unloadKey: (key) => {
-              unloadKeyCalls.push(key)
+              return loadKeyDeferred.promise
             },
           }
         },
@@ -1993,18 +1979,15 @@ describe(`Collection isLoadingSubset property`, () => {
     expect(secondLoad).toBe(firstLoad)
     expect(loadKeyCalls).toEqual([`a`])
 
-    collection.unloadKey(`a`)
-    expect(unloadKeyCalls).toEqual([])
+    loadKeyDeferred.resolve()
+    await flushPromises()
 
-    collection.unloadKey(`a`)
-    expect(unloadKeyCalls).toEqual([`a`])
+    collection.loadKey(`a`)
+    expect(loadKeyCalls).toEqual([`a`, `a`])
   })
 
   it(`loadKey tracks loadingSubset state`, async () => {
-    let resolveLoadKey: () => void
-    const loadKeyPromise = new Promise<void>((resolve) => {
-      resolveLoadKey = resolve
-    })
+    const loadKeyDeferred = createDeferred<void>()
 
     const collection = createCollection<{ id: string; value: string }, string>({
       id: `test`,
@@ -2015,7 +1998,7 @@ describe(`Collection isLoadingSubset property`, () => {
         sync: ({ markReady }) => {
           markReady()
           return {
-            loadKey: () => loadKeyPromise,
+            loadKey: () => loadKeyDeferred.promise,
           }
         },
       },
@@ -2024,7 +2007,7 @@ describe(`Collection isLoadingSubset property`, () => {
     collection.loadKey(`a`)
     expect(collection.isLoadingSubset).toBe(true)
 
-    resolveLoadKey!()
+    loadKeyDeferred.resolve()
     await flushPromises()
 
     expect(collection.isLoadingSubset).toBe(false)

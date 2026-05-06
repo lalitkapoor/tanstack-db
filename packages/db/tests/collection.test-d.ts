@@ -83,7 +83,6 @@ describe(`Collection.loadKey type tests`, () => {
     expectTypeOf(testCollection.loadKey(`id1`)).toEqualTypeOf<
       Promise<void> | true
     >()
-    expectTypeOf(testCollection.unloadKey(`id1`)).toEqualTypeOf<void>()
     // @ts-expect-error - This collection is keyed by string, not number.
     testCollection.loadKey(1)
   })

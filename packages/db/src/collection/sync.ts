@@ -49,7 +49,6 @@ export class CollectionSyncManager<
   public syncUnloadSubsetFn: ((options: LoadSubsetOptions) => void) | null =
     null
   public syncLoadKeyFn: LoadKeyFn<TKey> | null = null
-  public syncUnloadKeyFn: ((key: TKey) => void) | null = null
 
   private pendingLoadSubsetPromises: Set<Promise<void>> = new Set()
 
@@ -263,9 +262,6 @@ export class CollectionSyncManager<
 
       // Store loadKey function if provided
       this.syncLoadKeyFn = syncRes?.loadKey ?? null
-
-      // Store unloadKey function if provided
-      this.syncUnloadKeyFn = syncRes?.unloadKey ?? null
 
       // Validate: on-demand mode requires at least one manual loading function
       if (
@@ -533,22 +529,13 @@ export class CollectionSyncManager<
 
     if (this.syncLoadKeyFn) {
       const result = this.syncLoadKeyFn(key)
-      if (result instanceof Promise) {
+      if (result !== true) {
         this.trackLoadPromise(result)
         return result
       }
     }
 
     return true
-  }
-
-  /**
-   * Notifies the sync layer that one directly loaded collection key is no longer needed.
-   */
-  public unloadKey(key: TKey): void {
-    if (this.syncUnloadKeyFn) {
-      this.syncUnloadKeyFn(key)
-    }
   }
 
   public cleanup(): void {

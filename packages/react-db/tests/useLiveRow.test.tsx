@@ -10,23 +10,25 @@ type Person = {
   age: number
 }
 
-const initialPersons: Array<Person> = [
-  {
-    id: `1`,
-    name: `John Doe`,
-    age: 30,
-  },
-  {
-    id: `2`,
-    name: `Jane Doe`,
-    age: 25,
-  },
-  {
-    id: `3`,
-    name: `John Smith`,
-    age: 35,
-  },
-]
+const johnDoe: Person = {
+  id: `1`,
+  name: `John Doe`,
+  age: 30,
+}
+
+const janeDoe: Person = {
+  id: `2`,
+  name: `Jane Doe`,
+  age: 25,
+}
+
+const johnSmith: Person = {
+  id: `3`,
+  name: `John Smith`,
+  age: 35,
+}
+
+const initialPersons: Array<Person> = [johnDoe, janeDoe, johnSmith]
 
 function createPersonsCollection() {
   return createCollection(
@@ -42,9 +44,7 @@ describe(`useLiveRow`, () => {
   it(`returns the current record for a collection key`, async () => {
     const collection = createPersonsCollection()
 
-    const { result } = renderHook(() =>
-      useLiveRow(collection, `2`),
-    )
+    const { result } = renderHook(() => useLiveRow(collection, `2`))
 
     await waitFor(() => {
       expect(result.current.data?.id).toBe(`2`)
@@ -137,9 +137,8 @@ describe(`useLiveRow`, () => {
     })
   })
 
-  it(`loads and unloads the collection key while subscribed`, async () => {
+  it(`loads a missing collection key while subscribed`, async () => {
     const loadKeyCalls: Array<string> = []
-    const unloadKeyCalls: Array<string> = []
     const collection = createCollection<Person, string>({
       id: `test-persons-on-demand`,
       getKey: (person) => person.id,
@@ -153,24 +152,71 @@ describe(`useLiveRow`, () => {
               loadKeyCalls.push(key)
               return true
             },
-            unloadKey: (key) => {
-              unloadKeyCalls.push(key)
-            },
           }
         },
       },
     })
 
-    const { unmount } = renderHook(() =>
-      useLiveRow(collection, `2`),
-    )
+    const { unmount } = renderHook(() => useLiveRow(collection, `2`))
 
     await waitFor(() => {
       expect(loadKeyCalls).toEqual([`2`])
     })
 
     unmount()
-    expect(unloadKeyCalls).toEqual([`2`])
+    expect(loadKeyCalls).toEqual([`2`])
+  })
+
+  it(`keeps the collection active through the row subscription`, async () => {
+    const collection = createPersonsCollection()
+    expect(collection.subscriberCount).toBe(0)
+
+    const { unmount } = renderHook(() => useLiveRow(collection, `2`))
+
+    await waitFor(() => {
+      expect(collection.subscriberCount).toBe(1)
+    })
+
+    unmount()
+    expect(collection.subscriberCount).toBe(0)
+  })
+
+  it(`does not load an in-memory row`, async () => {
+    const loadKeyCalls: Array<string> = []
+    const collection = createCollection<Person, string>({
+      id: `test-persons-in-memory`,
+      getKey: (person) => person.id,
+      syncMode: `on-demand`,
+      startSync: true,
+      sync: {
+        sync: ({ begin, commit, markReady, write }) => {
+          begin()
+          write({
+            type: `insert`,
+            value: janeDoe,
+          })
+          commit()
+          markReady()
+          return {
+            loadKey: (key) => {
+              loadKeyCalls.push(key)
+              return true
+            },
+          }
+        },
+      },
+    })
+
+    const { result, unmount } = renderHook(() => useLiveRow(collection, `2`))
+
+    await waitFor(() => {
+      expect(result.current.data?.name).toBe(`Jane Doe`)
+    })
+
+    expect(loadKeyCalls).toEqual([])
+
+    unmount()
+    expect(loadKeyCalls).toEqual([])
   })
 
   it(`renders a missing record after loadKey writes it`, async () => {
@@ -191,7 +237,7 @@ describe(`useLiveRow`, () => {
               begin()
               write({
                 type: `insert`,
-                value: initialPersons[1]!,
+                value: janeDoe,
               })
               commit()
               return true
@@ -201,9 +247,7 @@ describe(`useLiveRow`, () => {
       },
     })
 
-    const { result } = renderHook(() =>
-      useLiveRow(collection, `2`),
-    )
+    const { result } = renderHook(() => useLiveRow(collection, `2`))
 
     await waitFor(() => {
       expect(result.current.data?.name).toBe(`Jane Doe`)

@@ -19,6 +19,7 @@ export type ElectronPersistenceResolution = {
 
 export type ElectronPersistenceMethod =
   | `loadSubset`
+  | `loadKeys`
   | `loadCollectionMetadata`
   | `scanRows`
   | `applyCommittedTx`
@@ -31,6 +32,9 @@ export type ElectronPersistencePayloadMap = {
   loadSubset: {
     options: LoadSubsetOptions
     ctx?: { requiredIndexSignatures?: ReadonlyArray<string> }
+  }
+  loadKeys: {
+    keys: ReadonlyArray<ElectronPersistedKey>
   }
   loadCollectionMetadata: {}
   scanRows: {
@@ -56,6 +60,11 @@ export type ElectronPersistencePayloadMap = {
 
 export type ElectronPersistenceResultMap = {
   loadSubset: Array<{ key: ElectronPersistedKey; value: ElectronPersistedRow }>
+  loadKeys: Array<{
+    key: ElectronPersistedKey
+    value: ElectronPersistedRow
+    metadata?: unknown
+  }>
   loadCollectionMetadata: Array<{ key: string; value: unknown }>
   scanRows: Array<{
     key: ElectronPersistedKey

@@ -1048,13 +1048,6 @@ class PersistedCollectionRuntime<
     }
   }
 
-  unloadKey(
-    key: TKey,
-    upstreamUnloadKey?: (key: TKey) => void,
-  ): void {
-    upstreamUnloadKey?.(key)
-  }
-
   async forceReloadSubset(options: LoadSubsetOptions): Promise<void> {
     this.activeSubsets.set(this.getSubsetKey(options), options)
     await this.applyMutex.run(() =>
@@ -2294,9 +2287,6 @@ function createWrappedSyncConfig<
 
         return `opts:${stableSerialize(normalizeSubsetOptionsForKey(options))}`
       }
-      const getPointLoadKey = (key: TKey) => {
-        return `key:${stableSerialize(key)}`
-      }
       runtime.setSyncControls({
         begin: params.begin,
         write: params.write as SyncControlFns<T, TKey>[`write`],
@@ -2586,18 +2576,12 @@ function createWrappedSyncConfig<
           runtime.unloadSubset(options, sourceResult.unloadSubset)
         },
         loadKey: async (key: TKey) => {
-          const loadKey = getPointLoadKey(key)
-          cancelledLoadKeys.delete(loadKey)
           await fullStartPromise
           const resolvedSourceResult = await sourceResultPromise
-          if (startupState.cleanedUp || cancelledLoadKeys.has(loadKey)) {
+          if (startupState.cleanedUp) {
             return
           }
           await runtime.loadKey(key, resolvedSourceResult.loadKey)
-        },
-        unloadKey: (key: TKey) => {
-          cancelledLoadKeys.add(getPointLoadKey(key))
-          runtime.unloadKey(key, sourceResult.unloadKey)
         },
       }
     },
@@ -2640,7 +2624,6 @@ function createLoopbackSyncConfig<
         unloadSubset: (options: LoadSubsetOptions) =>
           runtime.unloadSubset(options),
         loadKey: (key: TKey) => runtime.loadKey(key),
-        unloadKey: (key: TKey) => runtime.unloadKey(key),
       }
     },
     getSyncMetadata: () => ({
